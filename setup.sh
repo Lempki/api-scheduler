@@ -1,40 +1,37 @@
 #!/usr/bin/env bash
+# Prepares a local development environment with uv.
+# Run it from the repository root. It is safe to run again at any time.
 set -e
 
 trap 'echo; echo "ERROR: Setup failed (line $LINENO). Press Enter to close..."; read -r _' ERR
 
-echo "=== discord-api-scheduler setup ==="
+echo "=== $(basename "$(pwd)") setup ==="
 echo
 
-# Create virtual environment if it doesn't already exist
-if [ ! -d ".venv" ]; then
-    echo "Creating virtual environment..."
-    python3 -m venv .venv
-else
-    echo "Virtual environment already exists, skipping creation."
+if ! command -v uv >/dev/null 2>&1; then
+    echo "ERROR: uv was not found. Install it from https://docs.astral.sh/uv/ and run this script again."
+    read -rp "Press Enter to close..."
+    exit 1
 fi
 
-# Upgrade pip
-echo "Upgrading pip..."
-.venv/bin/python -m pip install --upgrade pip --quiet
+# uv creates .venv on first run and installs the package with its locked dependencies.
+echo "Installing dependencies..."
+uv sync
 
-# Install package with dev extras (editable)
-echo "Installing package and dev dependencies..."
-.venv/bin/python -m pip install -e ".[dev]"
-
-# Copy .env.template to .env if .env doesn't exist yet
 if [ ! -f ".env" ]; then
     cp .env.template .env
-    echo "Created .env from .env.template"
+    echo "Created .env from .env.template."
     echo "  > Edit .env and set DISCORD_API_SECRET before running the API."
 else
     echo ".env already exists, skipping."
 fi
 
+# The package is the directory under src/ that holds main.py.
+package="$(basename "$(dirname "$(ls src/*/main.py | head -n 1)")")"
+
 echo
 echo "Setup complete!"
-echo "  Activate venv : source .venv/bin/activate"
-echo "  Run the API   : .venv/bin/python -m uvicorn scheduler_api.main:app --reload"
-echo "  Run tests     : .venv/bin/python -m pytest"
+echo "  Run the API : uv run uvicorn ${package}.main:app --reload"
+echo "  Run tests   : uv run pytest"
 echo
 read -rp "Press Enter to close..."
