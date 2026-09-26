@@ -1,5 +1,4 @@
 import json
-from datetime import datetime
 from typing import Any
 
 import aiosqlite
@@ -72,12 +71,16 @@ async def insert_reminder(reminder: dict[str, Any]) -> None:
 
 async def get_reminder(reminder_id: str) -> dict[str, Any] | None:
     db = _get_conn()
-    async with db.execute("SELECT * FROM reminders WHERE reminder_id = ?", (reminder_id,)) as cur:
+    async with db.execute(
+        "SELECT * FROM reminders WHERE reminder_id = ?", (reminder_id,)
+    ) as cur:
         row = await cur.fetchone()
     return _row_to_dict(row) if row else None
 
 
-async def update_status(reminder_id: str, status: str, retry_count: int | None = None) -> None:
+async def update_status(
+    reminder_id: str, status: str, retry_count: int | None = None
+) -> None:
     db = _get_conn()
     if retry_count is not None:
         await db.execute(
@@ -85,7 +88,10 @@ async def update_status(reminder_id: str, status: str, retry_count: int | None =
             (status, retry_count, reminder_id),
         )
     else:
-        await db.execute("UPDATE reminders SET status = ? WHERE reminder_id = ?", (status, reminder_id))
+        await db.execute(
+            "UPDATE reminders SET status = ? WHERE reminder_id = ?",
+            (status, reminder_id),
+        )
     await db.commit()
 
 

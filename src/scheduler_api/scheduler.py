@@ -1,8 +1,7 @@
 """APScheduler v3 wrapper. Restores all scheduled reminders from SQLite on startup."""
 
-import asyncio
 import logging
-from datetime import timezone
+from datetime import UTC
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
@@ -23,7 +22,7 @@ def get_scheduler() -> AsyncIOScheduler:
 async def start(max_retries: int) -> None:
     global _scheduler, _max_retries
     _max_retries = max_retries
-    _scheduler = AsyncIOScheduler(timezone=timezone.utc)
+    _scheduler = AsyncIOScheduler(timezone=UTC)
     _scheduler.start()
 
     pending = await database.get_scheduled_reminders()
@@ -45,7 +44,7 @@ def _schedule_job(reminder: dict) -> None:
     if isinstance(fire_at, str):
         fire_at = parse_dt(fire_at)
 
-    fire_at = fire_at.astimezone(timezone.utc)
+    fire_at = fire_at.astimezone(UTC)
 
     _scheduler.add_job(  # type: ignore[union-attr]
         _fire_wrapper,

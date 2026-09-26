@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from . import database, scheduler
@@ -33,7 +33,7 @@ async def create(req: CreateReminderRequest) -> ReminderResponse:
         "bot_callback_url": req.bot_callback_url,
         "status": "scheduled",
         "retry_count": 0,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
     await database.insert_reminder(row)
     scheduler.schedule_reminder(row)

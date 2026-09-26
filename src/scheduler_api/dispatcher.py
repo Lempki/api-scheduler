@@ -14,7 +14,9 @@ _RETRY_DELAYS = [30, 120, 600]  # seconds: 30s, 2m, 10m
 
 async def fire(reminder: dict, max_retries: int) -> None:
     reminder_id = reminder["reminder_id"]
-    destinations = [d for d in [reminder.get("webhook_url"), reminder.get("bot_callback_url")] if d]
+    destinations = [
+        d for d in [reminder.get("webhook_url"), reminder.get("bot_callback_url")] if d
+    ]
 
     payload = {
         "reminder_id": reminder_id,
@@ -49,7 +51,9 @@ async def fire(reminder: dict, max_retries: int) -> None:
     await database.update_status(reminder_id, "failed")
 
 
-async def _try_dispatch(destinations: list[str], payload: dict, reminder_id: str) -> bool:
+async def _try_dispatch(
+    destinations: list[str], payload: dict, reminder_id: str
+) -> bool:
     async with httpx.AsyncClient(timeout=10.0) as client:
         for url in destinations:
             try:
@@ -58,5 +62,7 @@ async def _try_dispatch(destinations: list[str], payload: dict, reminder_id: str
                 logger.info("reminder %s delivered to %s", reminder_id, url)
                 return True
             except Exception as exc:
-                logger.warning("reminder %s delivery to %s failed: %s", reminder_id, url, exc)
+                logger.warning(
+                    "reminder %s delivery to %s failed: %s", reminder_id, url, exc
+                )
     return False

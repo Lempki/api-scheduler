@@ -1,13 +1,12 @@
 import logging
 import logging.config
 from contextlib import asynccontextmanager
-from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 
 from . import database, reminder_store, scheduler
 from .auth import require_auth
-from .config import Settings, get_settings
+from .config import get_settings
 from .models import (
     CreateReminderRequest,
     HealthResponse,
@@ -22,10 +21,15 @@ def _configure_logging(level: str) -> None:
             "version": 1,
             "formatters": {
                 "json": {
-                    "format": '{"time":"%(asctime)s","level":"%(levelname)s","name":"%(name)s","message":"%(message)s"}'
+                    "format": (
+                        '{"time":"%(asctime)s","level":"%(levelname)s",'
+                        '"name":"%(name)s","message":"%(message)s"}'
+                    )
                 }
             },
-            "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "json"}},
+            "handlers": {
+                "console": {"class": "logging.StreamHandler", "formatter": "json"}
+            },
             "root": {"level": level, "handlers": ["console"]},
         }
     )
@@ -57,12 +61,21 @@ async def health() -> HealthResponse:
     )
 
 
-@app.post("/reminders", response_model=ReminderResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_auth)])
+@app.post(
+    "/reminders",
+    response_model=ReminderResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_auth)],
+)
 async def create_reminder(body: CreateReminderRequest) -> ReminderResponse:
     return await reminder_store.create(body)
 
 
-@app.get("/reminders", response_model=ReminderListResponse, dependencies=[Depends(require_auth)])
+@app.get(
+    "/reminders",
+    response_model=ReminderListResponse,
+    dependencies=[Depends(require_auth)],
+)
 async def list_reminders(
     guild_id: str | None = Query(default=None),
     reminder_status: str | None = Query(default=None, alias="status"),
@@ -72,15 +85,25 @@ async def list_reminders(
     return await reminder_store.list_reminders(guild_id, reminder_status, limit, offset)
 
 
-@app.get("/reminders/{reminder_id}", response_model=ReminderResponse, dependencies=[Depends(require_auth)])
+@app.get(
+    "/reminders/{reminder_id}",
+    response_model=ReminderResponse,
+    dependencies=[Depends(require_auth)],
+)
 async def get_reminder(reminder_id: str) -> ReminderResponse:
     result = await reminder_store.get(reminder_id)
     if result is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reminder not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Reminder not found."
+        )
     return result
 
 
-@app.delete("/reminders/{reminder_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_auth)])
+@app.delete(
+    "/reminders/{reminder_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_auth)],
+)
 async def cancel_reminder(reminder_id: str) -> None:
     cancelled = await reminder_store.cancel(reminder_id)
     if not cancelled:
