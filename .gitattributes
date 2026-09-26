@@ -1,0 +1,16 @@
+# >>> dev-standards managed block. Change it in discord-dev-standards.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ogg binary
+*.mp3 binary
+*.wav binary
+*.mp4 binary
+*.mov binary
+*.webm binary
+# <<< dev-standards managed block.

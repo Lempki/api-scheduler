@@ -1,0 +1,21 @@
+# Shared editor settings for the Discord bot and API repositories.
+# This file is managed by discord-dev-standards. Change it there, not here.
+# EditorConfig covers whitespace and encoding only. Ruff and the check-prose hook cover the rest.
+
+root = true
+
+[*]
+# UTF-8 without a BOM and LF endings, because every service is built and run in Linux containers.
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{yml,yaml,json}]
+indent_size = 2
+
+[*.{bat,cmd}]
+# The Windows command interpreter misreads some scripts saved with LF endings.
+end_of_line = crlf

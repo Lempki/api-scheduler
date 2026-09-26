@@ -1,0 +1,42 @@
+# Shared ruff baseline for the Discord bot and API repositories.
+# This file is managed by discord-dev-standards. Change it there, not here.
+# Each repository's ruff.toml extends this file and adds only repository-specific settings.
+
+line-length = 88
+target-version = "py312"
+
+[format]
+quote-style = "double"
+docstring-code-format = true
+
+[lint]
+select = [
+    "E",   # pycodestyle errors.
+    "W",   # pycodestyle warnings.
+    "F",   # Pyflakes.
+    "I",   # Import sorting.
+    "UP",  # Modern syntax for the target Python version.
+    "B",   # Likely bugs.
+    "SIM", # Simplifications.
+    "C4",  # Comprehensions.
+    "PTH", # pathlib over os.path.
+    "D",   # Docstrings.
+    "ANN", # Annotations on every signature.
+]
+ignore = [
+    "D104",   # Empty package markers need no docstring.
+    "D105",   # Magic methods are self-describing.
+    "D107",   # Google style documents __init__ arguments in the class docstring.
+    "ANN401", # Any is allowed where a signature genuinely accepts anything.
+]
+
+[lint.pydocstyle]
+convention = "google"
+
+[lint.pycodestyle]
+# The formatter aims for 88 characters. The linter only rejects lines past 100.
+# Comments and docstrings are never wrapped mid-sentence, so they get the extra room.
+max-line-length = 100
+
+[lint.per-file-ignores]
+"tests/**" = ["D"]
