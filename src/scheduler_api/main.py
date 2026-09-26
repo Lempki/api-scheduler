@@ -1,5 +1,6 @@
-import logging
-import logging.config
+"""The FastAPI application, its lifespan, and its routes."""
+
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
@@ -7,38 +8,27 @@ from fastapi import Depends, FastAPI, HTTPException, Query, status
 from . import database, reminder_store, scheduler
 from .auth import require_auth
 from .config import get_settings
+from .logging_config import configure_logging
 from .models import (
     CreateReminderRequest,
     HealthResponse,
     ReminderListResponse,
     ReminderResponse,
 )
+from .service import service_version
 
+# The service name is also the project name in pyproject.toml, which the version is read from.
+SERVICE = "discord-api-scheduler"
+VERSION = service_version(SERVICE)
 
-def _configure_logging(level: str) -> None:
-    logging.config.dictConfig(
-        {
-            "version": 1,
-            "formatters": {
-                "json": {
-                    "format": (
-                        '{"time":"%(asctime)s","level":"%(levelname)s",'
-                        '"name":"%(name)s","message":"%(message)s"}'
-                    )
-                }
-            },
-            "handlers": {
-                "console": {"class": "logging.StreamHandler", "formatter": "json"}
-            },
-            "root": {"level": level, "handlers": ["console"]},
-        }
-    )
+# Logging is set up on import, before uvicorn prints its startup lines, so every line is JSON.
+configure_logging(get_settings().log_level)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Opens the database and starts the scheduler, then stops both on shutdown."""
     settings = get_settings()
-    _configure_logging(settings.log_level)
     await database.init(settings.scheduler_db_path)
     await scheduler.start(settings.dispatcher_max_retries)
     yield
@@ -46,16 +36,17 @@ async def lifespan(app: FastAPI):
     await database.close()
 
 
-app = FastAPI(title="discord-api-scheduler", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title=SERVICE, version=VERSION, lifespan=lifespan)
 
 
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
+    """Reports that the service is up. It needs no token, so monitors and Docker can call it."""
     sched = scheduler._scheduler
     return HealthResponse(
         status="ok",
-        service="discord-api-scheduler",
-        version="1.0.0",
+        service=SERVICE,
+        version=VERSION,
         scheduler="running" if sched and sched.running else "stopped",
         pending_jobs=scheduler.pending_count(),
     )
