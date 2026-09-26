@@ -17,7 +17,9 @@ The shared conventions live in [discord-dev-standards](https://github.com/Lempki
 ## Layout
 
 * `src/scheduler_api/main.py` defines the app, the lifespan, and the routes.
-* `src/scheduler_api/config.py` reads settings from the environment with pydantic-settings.
+* `src/scheduler_api/config.py` adds this service's settings to `ServiceSettings`.
+* `src/scheduler_api/service.py` holds `ServiceSettings`, which validates the shared secret, and `service_version()`, which reads the version from pyproject.toml.
+* `src/scheduler_api/logging_config.py` turns every log record, including uvicorn's, into one JSON line.
 * `src/scheduler_api/auth.py` holds the bearer token dependency that protects every route except `/health`.
 * `src/scheduler_api/models.py` holds the request and response models.
 * `src/scheduler_api/database.py` holds the SQLite schema and async query helpers.
@@ -30,3 +32,5 @@ The shared conventions live in [discord-dev-standards](https://github.com/Lempki
 * `.template-manifest.toml` in the template lists the core files this service keeps identical to it.
 * Pick up a template change with `dev-standards template-check --apply`, run against `discord-api-template`.
 * Service-specific behavior lives outside the manifest, such as `main.py`, `config.py`, `models.py`, `database.py`, `reminder_store.py`, `scheduler.py`, and `dispatcher.py`.
+* Keep the version only in pyproject.toml, and keep `SERVICE` in main.py equal to the project name there.
+* `uv run mypy src` must pass in strict mode, because CI runs it.

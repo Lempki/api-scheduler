@@ -10,9 +10,12 @@ This is a REST API for scheduling persistent reminders on behalf of Discord bots
 | `GET` | `/reminders` | List reminders, optionally filtered by guild or status. |
 | `GET` | `/reminders/{reminder_id}` | Get the status and details of a specific reminder. |
 | `DELETE` | `/reminders/{reminder_id}` | Cancel a pending reminder. |
-| `GET` | `/health` | Returns the service name, version, scheduler status, and pending job count. |
+| `GET` | `/health` | Returns the service name, version, scheduler status, and pending job count. The Docker image also uses it as its health check. |
 
 All endpoints except `/health` require a bearer token in the `Authorization` header.
+A request without the header or with a wrong token gets `401 Unauthorized` with a `WWW-Authenticate: Bearer` header.
+Tokens are compared in constant time.
+The version that `/health` and the OpenAPI docs report is read from `pyproject.toml`.
 
 ### POST /reminders
 
@@ -107,6 +110,7 @@ Alternatively, you can run the API as a Docker container.
    ```
 
 The container runs on port `8000` internally. Docker Compose maps it to port `8004` on the host. The Docker Compose configuration also creates a named volume for the SQLite database so that reminders persist across container restarts.
+The image has a health check that calls `/health`, so Docker marks the container unhealthy when the service stops answering.
 
 ## Configuration
 
@@ -114,10 +118,12 @@ All configuration is read from environment variables or from a `.env` file in th
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `DISCORD_API_SECRET` | Yes | — | Shared bearer token. All Discord bots must send this value in the `Authorization` header. |
+| `DISCORD_API_SECRET` | Yes | None | Shared bearer token of at least 16 characters. All Discord bots must send this value in the `Authorization` header. The service refuses to start with a placeholder such as `changeme`. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"`. |
 | `SCHEDULER_DB_PATH` | No | `/data/scheduler.db` | Absolute path to the SQLite database file. The directory must be writable. |
-| `LOG_LEVEL` | No | `INFO` | Log verbosity. Accepts standard Python logging levels. |
+| `LOG_LEVEL` | No | `INFO` | Log verbosity. Accepts `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
 | `DISPATCHER_MAX_RETRIES` | No | `3` | Number of delivery retry attempts before a reminder is marked as failed. |
+
+The service logs one JSON object per line, including uvicorn's access log.
 
 ## Project structure
 
@@ -125,7 +131,9 @@ All configuration is read from environment variables or from a `.env` file in th
 discord-api-scheduler/
 ├── src/scheduler_api/
 │   ├── main.py             # FastAPI application and route definitions.
-│   ├── config.py           # Environment variable reader.
+│   ├── config.py           # This service's settings on top of ServiceSettings.
+│   ├── service.py          # Shared settings, secret validation, and the version lookup.
+│   ├── logging_config.py   # Structured JSON logging, including uvicorn's loggers.
 │   ├── auth.py             # Bearer token dependency.
 │   ├── models.py           # Pydantic request and response models.
 │   ├── database.py         # SQLite schema and async query helpers.
