@@ -1,15 +1,18 @@
 import os
 
+import pytest
 from fastapi.testclient import TestClient
 
-os.environ.setdefault("DISCORD_API_SECRET", "test-secret")
+SECRET = "test-secret-0123456789"
+os.environ["DISCORD_API_SECRET"] = SECRET
 os.environ.setdefault("SCHEDULER_DB_PATH", ":memory:")
 
-from scheduler_api.main import app  # noqa: E402
+from scheduler_api.main import VERSION, app  # noqa: E402
+from scheduler_api.service import service_version  # noqa: E402
 
 
-# Lifespan initialises DB + scheduler; use TestClient as context manager
-# so each test gets a fresh lifespan (and a fresh in-memory DB).
+# The lifespan opens the database and starts the scheduler.
+# A TestClient context manager gives each test a fresh lifespan and a fresh in-memory database.
 def _make_client():
     return TestClient(app)
 
@@ -34,11 +37,11 @@ def test_create_reminder_requires_auth():
                 "webhook_url": "https://discord.com/api/webhooks/test",
             },
         )
-    assert r.status_code == 403
+    assert r.status_code == 401
 
 
 def test_create_and_get_reminder():
-    AUTH = {"Authorization": "Bearer test-secret"}
+    AUTH = {"Authorization": f"Bearer {SECRET}"}
     with _make_client() as client:
         r = client.post(
             "/reminders",
@@ -59,7 +62,7 @@ def test_create_and_get_reminder():
 
 
 def test_reminder_missing_destination():
-    AUTH = {"Authorization": "Bearer test-secret"}
+    AUTH = {"Authorization": f"Bearer {SECRET}"}
     with _make_client() as client:
         r = client.post(
             "/reminders",
@@ -74,7 +77,7 @@ def test_reminder_missing_destination():
 
 
 def test_cancel_reminder():
-    AUTH = {"Authorization": "Bearer test-secret"}
+    AUTH = {"Authorization": f"Bearer {SECRET}"}
     with _make_client() as client:
         r = client.post(
             "/reminders",
@@ -92,7 +95,7 @@ def test_cancel_reminder():
         assert r2.status_code == 204
 
 
-AUTH = {"Authorization": "Bearer test-secret"}
+AUTH = {"Authorization": f"Bearer {SECRET}"}
 WRONG = {"Authorization": "Bearer wrong"}
 
 _REMINDER_BODY = {
@@ -110,6 +113,31 @@ def test_health_includes_version():
     assert "pending_jobs" in r.json()
 
 
+def test_health_reports_the_package_version() -> None:
+    with _make_client() as client:
+        r = client.get("/health")
+    assert r.json()["service"] == "discord-api-scheduler"
+    assert r.json()["version"] == VERSION
+    assert VERSION == service_version("discord-api-scheduler") != "0.0.0"
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},
+        {"Authorization": "Bearer wrong"},
+        {"Authorization": f"Bearer {SECRET}x"},
+        {"Authorization": f"Basic {SECRET}"},
+    ],
+    ids=["missing", "wrong", "longer", "wrong-scheme"],
+)
+def test_protected_route_rejects_without_valid_token(headers: dict[str, str]) -> None:
+    with _make_client() as client:
+        r = client.post("/reminders", json=_REMINDER_BODY, headers=headers)
+    assert r.status_code == 401
+    assert r.headers["WWW-Authenticate"] == "Bearer"
+
+
 def test_create_reminder_wrong_auth():
     with _make_client() as client:
         r = client.post("/reminders", json=_REMINDER_BODY, headers=WRONG)
@@ -119,7 +147,7 @@ def test_create_reminder_wrong_auth():
 def test_get_reminder_requires_auth():
     with _make_client() as client:
         r = client.get("/reminders/nonexistent")
-    assert r.status_code == 403
+    assert r.status_code == 401
 
 
 def test_get_reminder_wrong_auth():
@@ -143,13 +171,13 @@ def test_cancel_nonexistent_reminder_returns_404():
 def test_cancel_reminder_requires_auth():
     with _make_client() as client:
         r = client.delete("/reminders/any-id")
-    assert r.status_code == 403
+    assert r.status_code == 401
 
 
 def test_list_reminders_requires_auth():
     with _make_client() as client:
         r = client.get("/reminders")
-    assert r.status_code == 403
+    assert r.status_code == 401
 
 
 def test_list_reminders_wrong_auth():
