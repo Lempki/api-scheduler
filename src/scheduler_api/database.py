@@ -113,7 +113,9 @@ async def list_reminders(
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
     async with db.execute(f"SELECT COUNT(*) FROM reminders {where}", params) as cur:
-        total = (await cur.fetchone())[0]
+        # COUNT(*) always returns exactly one row.
+        count_row = await cur.fetchone()
+    total: int = count_row[0] if count_row is not None else 0
 
     async with db.execute(
         f"SELECT * FROM reminders {where} ORDER BY fire_at ASC LIMIT ? OFFSET ?",

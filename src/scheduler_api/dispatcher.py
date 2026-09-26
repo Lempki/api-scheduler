@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from typing import Any
 
 import httpx
 
@@ -9,10 +10,11 @@ from . import database
 
 logger = logging.getLogger(__name__)
 
-_RETRY_DELAYS = [30, 120, 600]  # seconds: 30s, 2m, 10m
+# The delays between attempts, in seconds, are 30 seconds, 2 minutes, and 10 minutes.
+_RETRY_DELAYS = [30, 120, 600]
 
 
-async def fire(reminder: dict, max_retries: int) -> None:
+async def fire(reminder: dict[str, Any], max_retries: int) -> None:
     reminder_id = reminder["reminder_id"]
     destinations = [
         d for d in [reminder.get("webhook_url"), reminder.get("bot_callback_url")] if d
@@ -52,7 +54,7 @@ async def fire(reminder: dict, max_retries: int) -> None:
 
 
 async def _try_dispatch(
-    destinations: list[str], payload: dict, reminder_id: str
+    destinations: list[str], payload: dict[str, Any], reminder_id: str
 ) -> bool:
     async with httpx.AsyncClient(timeout=10.0) as client:
         for url in destinations:

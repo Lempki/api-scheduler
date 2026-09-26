@@ -2,6 +2,7 @@
 
 import logging
 from datetime import UTC
+from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
@@ -37,7 +38,7 @@ def stop() -> None:
         _scheduler.shutdown(wait=False)
 
 
-def _schedule_job(reminder: dict) -> None:
+def _schedule_job(reminder: dict[str, Any]) -> None:
     from dateutil.parser import parse as parse_dt
 
     fire_at = reminder["fire_at"]
@@ -56,7 +57,7 @@ def _schedule_job(reminder: dict) -> None:
     )
 
 
-def schedule_reminder(reminder: dict) -> None:
+def schedule_reminder(reminder: dict[str, Any]) -> None:
     _schedule_job(reminder)
 
 
@@ -74,5 +75,5 @@ def pending_count() -> int:
     return len(_scheduler.get_jobs())
 
 
-async def _fire_wrapper(reminder: dict, max_retries: int) -> None:
+async def _fire_wrapper(reminder: dict[str, Any], max_retries: int) -> None:
     await dispatcher.fire(reminder, max_retries)
