@@ -17,27 +17,65 @@ A request without the header or with a wrong token gets `401 Unauthorized` with 
 Tokens are compared in constant time.
 The version that `/health` and the OpenAPI docs report is read from `pyproject.toml`.
 
+### Breaking changes in this version
+
+These changes break clients written for the previous version.
+
+* `webhook_url` must be a Discord Execute Webhook URL, and `payload` must then be a Discord message body. The old envelope is no longer sent to Discord, because Discord rejected it.
+* `bot_callback_url` is refused unless its host is listed in `ALLOWED_CALLBACK_HOSTS`, which is empty by default.
+* Every bot callback carries a signature that the receiver should verify.
+* `fire_at` must include a timezone offset and lie in the future.
+* `channel_id` and `guild_id` must be Discord snowflakes of 17 to 20 digits. The `guild_id` and `status` filters of `GET /reminders` are validated the same way.
+* A reminder that came due while the service was down now fires at startup instead of being dropped. Set `MISSED_REMINDER_POLICY=fail` to mark such reminders failed instead.
+
 ### POST /reminders
+
+This body posts "Raid starts in 15 minutes!" to a Discord channel through a webhook.
 
 ```json
 {
   "fire_at": "2026-12-24T18:00:00+02:00",
   "channel_id": "123456789012345678",
   "guild_id": "987654321098765432",
+  "webhook_url": "https://discord.com/api/webhooks/1234567890123456789/your-webhook-token",
   "payload": {
-    "message": "Merry Christmas!"
-  },
-  "webhook_url": "https://discord.com/api/webhooks/..."
+    "content": "Raid starts in 15 minutes!",
+    "username": "Raid Reminder",
+    "embeds": [{"title": "Molten Core", "description": "Meet at the entrance."}]
+  }
 }
 ```
 
-`fire_at` must be an ISO 8601 datetime with a timezone offset. Times are stored and processed internally as UTC. At least one of `webhook_url` or `bot_callback_url` must be provided.
+`fire_at` must be an ISO 8601 datetime with a timezone offset, and it must be in the future.
+A datetime without an offset gets `422 Unprocessable Entity`.
+Times are stored and processed internally as UTC.
+`channel_id` and `guild_id` are Discord snowflakes, sent as strings of 17 to 20 digits.
+At least one of `webhook_url` or `bot_callback_url` must be provided.
+
+`webhook_url` must have the form `https://discord.com/api/webhooks/{id}/{token}`.
+The hosts `discord.com`, `ptb.discord.com`, `canary.discord.com`, and `discordapp.com` are accepted, and so is an API version segment such as `/api/v10/`.
+The only query parameter allowed is a numeric `thread_id`, which posts into a thread.
+
+When `webhook_url` is set, `payload` is the JSON body of Discord's [Execute Webhook](https://discord.com/developers/docs/resources/webhook#execute-webhook) endpoint.
+The accepted fields are `content`, `username`, `avatar_url`, `tts`, `embeds`, `allowed_mentions`, `components`, `attachments`, `flags`, `thread_name`, `applied_tags`, and `poll`.
+Any other field gets `422`.
+The body needs at least one of `content`, `embeds`, `components`, or `poll`.
+`content` holds at most 2000 characters, `embeds` at most 10 items, and `username` at most 80 characters.
+When `allowed_mentions` is missing, it defaults to `{"parse": []}`, so a reminder never pings `@everyone` or a role by accident.
+The stored and returned `payload` is the normalized body, including that default.
+
+When only `bot_callback_url` is set, `payload` is a free-form JSON object that is passed to the bot unchanged.
+`bot_callback_url` must be an `http` or `https` URL whose hostname is listed in `ALLOWED_CALLBACK_HOSTS`.
 
 Returns the created reminder including its assigned `reminder_id` and a `status` of `"scheduled"`.
 
 ### Delivery
 
-When a reminder fires, the API sends a `POST` request to the configured `webhook_url` or `bot_callback_url` with the following body:
+The webhook receives the stored `payload` as its JSON body.
+The service adds `wait=true` to the URL, so Discord answers only after the message exists.
+It also adds `with_components=true` when the body has `components`, which Discord requires for webhooks that no application owns.
+
+The bot callback receives this envelope.
 
 ```json
 {
@@ -49,9 +87,58 @@ When a reminder fires, the API sends a `POST` request to the configured `webhook
 }
 ```
 
-If delivery fails, the API retries up to three times with exponential backoff: 30 seconds, 2 minutes, and 10 minutes. After all attempts are exhausted, the reminder is marked as `"failed"` and will not be retried further.
+`fired_at` holds the scheduled fire time.
 
-`webhook_url` is the preferred delivery method because it does not depend on the bot process being reachable. `bot_callback_url` can be used when the bot needs to perform additional logic at fire time, such as looking up a role name.
+Each attempt sends the reminder to every configured destination that has not yet succeeded.
+A reminder is marked `"fired"` when every configured destination has answered with a 2xx status.
+A destination that succeeded is not sent the reminder again on a later retry.
+The answers are handled as follows.
+
+| Answer | Handling |
+|---|---|
+| 2xx | The destination succeeded. |
+| 429 | The service waits for the `retry_after` value of the JSON body, or else the `Retry-After` header, capped at 60 seconds. It then resends without using up a retry, at most three times in a row. |
+| Other 4xx | The error is permanent. The reminder is marked `"failed"` at once, and the status and the start of the response body are logged. |
+| 5xx or a network error | The attempt is retried up to `DISPATCHER_MAX_RETRIES` times, after 30 seconds, 2 minutes, and 10 minutes. |
+
+After all retries are used, the reminder is marked `"failed"` and will not be retried further.
+A reminder cancelled during a wait between sends is not sent again and stays `"cancelled"`.
+Delivery is at least once, so a restart during retries can resend a destination that already succeeded.
+
+`webhook_url` is the preferred delivery method because it does not depend on the bot process being reachable.
+`bot_callback_url` can be used when the bot needs to perform additional logic at fire time, such as looking up a role name.
+
+### Verifying a bot callback
+
+Every callback request carries two headers.
+`X-Signature-Timestamp` holds the Unix time in seconds when the request was signed.
+`X-Signature-SHA256` holds the hex HMAC-SHA256 of the timestamp, a dot, and the exact request body bytes, keyed with `DISCORD_API_SECRET`.
+The bot already holds this secret, because it sends the same value as its bearer token.
+
+The receiver recomputes the signature over the raw body before parsing it, compares the two in constant time, and rejects a timestamp older than 5 minutes.
+
+```python
+import hashlib
+import hmac
+import time
+
+
+def verify_callback(secret: str, timestamp: str, signature: str, body: bytes) -> bool:
+    """Returns True when a callback request is authentic and recent."""
+    if abs(time.time() - int(timestamp)) > 300:
+        return False
+    message = f"{timestamp}.".encode() + body
+    expected = hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+```
+
+### Missed reminders
+
+A reminder can come due while the service is down.
+At startup, `MISSED_REMINDER_POLICY` decides what happens to it.
+With `fire`, the default, it is delivered at once.
+With `fail`, it is marked `"failed"` and a log line names it.
+Reminders that are still in the future are scheduled as usual.
 
 ### GET /reminders
 
@@ -59,8 +146,8 @@ Query parameters:
 
 | Parameter | Description |
 |---|---|
-| `guild_id` | Filter to a specific Discord server. |
-| `status` | Filter by status. Accepted values: `scheduled`, `fired`, `failed`, `cancelled`. |
+| `guild_id` | Filter to a specific Discord server. It must be a snowflake of 17 to 20 digits. |
+| `status` | Filter by status. Accepted values: `scheduled`, `fired`, `failed`, `cancelled`. Any other value gets `422`. |
 | `limit` | Maximum number of results to return. Defaults to `50`, maximum `200`. |
 | `offset` | Number of results to skip for pagination. Defaults to `0`. |
 
@@ -121,7 +208,9 @@ All configuration is read from environment variables or from a `.env` file in th
 | `DISCORD_API_SECRET` | Yes | None | Shared bearer token of at least 16 characters. All Discord bots must send this value in the `Authorization` header. The service refuses to start with a placeholder such as `changeme`. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"`. |
 | `SCHEDULER_DB_PATH` | No | `/data/scheduler.db` | Absolute path to the SQLite database file. The directory must be writable. |
 | `LOG_LEVEL` | No | `INFO` | Log verbosity. Accepts `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
-| `DISPATCHER_MAX_RETRIES` | No | `3` | Number of delivery retry attempts before a reminder is marked as failed. |
+| `DISPATCHER_MAX_RETRIES` | No | `3` | Number of delivery retry attempts before a reminder is marked as failed. It must be 0 or more. |
+| `ALLOWED_CALLBACK_HOSTS` | No | Empty | Hostnames that `bot_callback_url` may point to, as a comma-separated list such as `bot.example.com,localhost` or as a JSON list. While it is empty, every bot callback is refused. |
+| `MISSED_REMINDER_POLICY` | No | `fire` | What startup does with a reminder that came due while the service was down. `fire` delivers it at once and `fail` marks it failed. |
 
 The service logs one JSON object per line, including uvicorn's access log.
 
@@ -139,7 +228,7 @@ discord-api-scheduler/
 │   ├── database.py         # SQLite schema and async query helpers.
 │   ├── reminder_store.py   # Business logic for creating, listing, and cancelling reminders.
 │   ├── scheduler.py        # APScheduler setup and job lifecycle management.
-│   └── dispatcher.py       # Webhook and callback delivery with retry logic.
+│   └── dispatcher.py       # Webhook and signed callback delivery with retry logic.
 ├── tests/
 ├── Dockerfile
 ├── docker-compose.yml
