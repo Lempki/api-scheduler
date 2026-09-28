@@ -118,6 +118,15 @@ def test_json_log_lines_stay_valid_with_quotes() -> None:
     )
 
 
+def test_request_urls_from_http_clients_are_not_logged() -> None:
+    logging_config.configure_logging("DEBUG")
+    try:
+        for name in ("httpx", "httpcore"):
+            assert not logging.getLogger(name).isEnabledFor(logging.INFO)
+    finally:
+        logging_config.configure_logging("INFO")
+
+
 def test_json_log_lines_include_exceptions() -> None:
     try:
         raise ValueError("boom")

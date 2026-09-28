@@ -42,11 +42,16 @@ def configure_logging(level: str) -> None:
                 "console": {"class": "logging.StreamHandler", "formatter": "json"}
             },
             "root": {"level": level, "handlers": ["console"]},
-            # Uvicorn installs its own handlers.
-            # Clearing them sends its records to the root handler instead.
             "loggers": {
-                name: {"handlers": [], "propagate": True}
-                for name in ("uvicorn", "uvicorn.error", "uvicorn.access")
+                # Uvicorn installs its own handlers.
+                # Clearing them sends its records to the root handler instead.
+                **{
+                    name: {"handlers": [], "propagate": True}
+                    for name in ("uvicorn", "uvicorn.error", "uvicorn.access")
+                },
+                # httpx logs every request URL at INFO, and a URL can hold a secret.
+                # A Discord webhook URL is one example, because its token is part of the path.
+                **{name: {"level": "WARNING"} for name in ("httpx", "httpcore")},
             },
         }
     )
