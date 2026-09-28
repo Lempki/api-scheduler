@@ -25,7 +25,8 @@ async def create(req: CreateReminderRequest) -> ReminderResponse:
     reminder_id = str(uuid.uuid4())
     row = {
         "reminder_id": reminder_id,
-        "fire_at": req.fire_at.isoformat(),
+        # UTC strings sort in time order, which ORDER BY fire_at relies on.
+        "fire_at": req.fire_at.astimezone(UTC).isoformat(),
         "channel_id": req.channel_id,
         "guild_id": req.guild_id,
         "payload": req.payload,

@@ -1,3 +1,5 @@
+"""The SQLite schema and async query helpers."""
+
 import json
 from typing import Any
 
@@ -40,7 +42,13 @@ async def close() -> None:
 
 
 def _get_conn() -> aiosqlite.Connection:
-    assert _conn is not None, "database not initialised — call init() first"
+    """Returns the open connection.
+
+    Raises:
+        RuntimeError: When init() has not been called.
+    """
+    if _conn is None:
+        raise RuntimeError("The database is not initialized. Call init() first.")
     return _conn
 
 
@@ -79,20 +87,38 @@ async def get_reminder(reminder_id: str) -> dict[str, Any] | None:
 
 
 async def update_status(
-    reminder_id: str, status: str, retry_count: int | None = None
-) -> None:
+    reminder_id: str,
+    status: str,
+    retry_count: int | None = None,
+    only_if: str | None = None,
+) -> bool:
+    """Sets a reminder's status and, optionally, its retry count.
+
+    Args:
+        reminder_id: The reminder to update.
+        status: The new status.
+        retry_count: The new retry count, or None to leave it unchanged.
+        only_if: When set, the row changes only while its status still equals this value.
+
+    Returns:
+        True when a row changed, False when none matched.
+    """
     db = _get_conn()
+    assignments = "status = ?"
+    params: list[Any] = [status]
     if retry_count is not None:
-        await db.execute(
-            "UPDATE reminders SET status = ?, retry_count = ? WHERE reminder_id = ?",
-            (status, retry_count, reminder_id),
-        )
-    else:
-        await db.execute(
-            "UPDATE reminders SET status = ? WHERE reminder_id = ?",
-            (status, reminder_id),
-        )
+        assignments += ", retry_count = ?"
+        params.append(retry_count)
+    condition = "reminder_id = ?"
+    params.append(reminder_id)
+    if only_if is not None:
+        condition += " AND status = ?"
+        params.append(only_if)
+    cursor = await db.execute(
+        f"UPDATE reminders SET {assignments} WHERE {condition}", params
+    )
     await db.commit()
+    return cursor.rowcount > 0
 
 
 async def list_reminders(
