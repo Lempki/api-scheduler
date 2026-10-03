@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/Lempki/discord-dev-standards
-    rev: v0.1.2
+    rev: v0.1.3
     hooks:
       - id: sync-files
       - id: check-prose
