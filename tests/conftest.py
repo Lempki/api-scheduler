@@ -5,5 +5,5 @@ get_settings() caches its first result, so these values must exist before main.p
 
 import os
 
-os.environ.setdefault("DISCORD_API_SECRET", "test-secret-0123456789")
+os.environ.setdefault("API_SECRET", "test-secret-0123456789")
 os.environ.setdefault("SCHEDULER_DB_PATH", ":memory:")

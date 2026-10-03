@@ -24,7 +24,7 @@ if errorlevel 1 (
 if not exist ".env" (
     copy ".env.template" ".env" >nul
     echo Created .env from .env.template.
-    echo   ^> Edit .env and set DISCORD_API_SECRET before running the API.
+    echo   ^> Edit .env and set API_SECRET before running the API.
 ) else (
     echo .env already exists, skipping.
 )

@@ -1,11 +1,11 @@
-# discord-api-scheduler
+# api-scheduler
 
 A FastAPI service that schedules persistent reminders on behalf of Discord bots.
 Reminders are stored in SQLite on the `/data` volume and scheduled with APScheduler 3, so they survive restarts.
 At fire time the service delivers each reminder to a webhook or bot callback URL, with retries on failure.
 A webhook reminder's `payload` is a validated Discord Execute Webhook body, which is posted to Discord as is.
-A bot callback receives an envelope signed with HMAC-SHA256 under `DISCORD_API_SECRET`, and only hosts in `ALLOWED_CALLBACK_HOSTS` are accepted.
-This project is based on [discord-api-template](https://github.com/Lempki/discord-api-template).
+A bot callback receives an envelope signed with HMAC-SHA256 under `API_SECRET`, and only hosts in `ALLOWED_CALLBACK_HOSTS` are accepted.
+This project is based on [api-template](https://github.com/Lempki/api-template).
 The shared conventions live in [discord-dev-standards](https://github.com/Lempki/discord-dev-standards), and its README is the rulebook for code, prose, and commits.
 
 ## Commands
@@ -33,7 +33,7 @@ The shared conventions live in [discord-dev-standards](https://github.com/Lempki
 ## Template rules
 
 * `.template-manifest.toml` in the template lists the core files this service keeps identical to it.
-* Pick up a template change with `dev-standards template-check --apply`, run against `discord-api-template`.
+* Pick up a template change with `dev-standards template-check --apply`, run against `api-template`.
 * Service-specific behavior lives outside the manifest, such as `main.py`, `config.py`, `models.py`, `database.py`, `reminder_store.py`, `scheduler.py`, and `dispatcher.py`.
 * Keep the version only in pyproject.toml, and keep `SERVICE` in main.py equal to the project name there.
 * `uv run mypy src` must pass in strict mode, because CI runs it.

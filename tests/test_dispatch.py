@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 SECRET = "test-secret-0123456789"
-os.environ["DISCORD_API_SECRET"] = SECRET
+os.environ["API_SECRET"] = SECRET
 os.environ.setdefault("SCHEDULER_DB_PATH", ":memory:")
 
 from scheduler_api import database, dispatcher, main, scheduler  # noqa: E402
@@ -84,7 +84,7 @@ async def db() -> AsyncIterator[None]:
 
 async def _fire(reminder: dict[str, Any], max_retries: int = 3) -> dict[str, Any]:
     await database.insert_reminder(reminder)
-    settings = Settings(discord_api_secret=SECRET, dispatcher_max_retries=max_retries)
+    settings = Settings(api_secret=SECRET, dispatcher_max_retries=max_retries)
     await dispatcher.fire(reminder, settings)
     row = await database.get_reminder(reminder["reminder_id"])
     assert row is not None
@@ -259,7 +259,7 @@ async def test_a_cancelled_reminder_is_not_sent_or_overwritten(
     reminder = _reminder()
     await database.insert_reminder(reminder)
     await database.update_status("r1", "cancelled")
-    await dispatcher.fire(reminder, Settings(discord_api_secret=SECRET))
+    await dispatcher.fire(reminder, Settings(api_secret=SECRET))
     row = await database.get_reminder("r1")
     assert row is not None
     assert row["status"] == "cancelled"

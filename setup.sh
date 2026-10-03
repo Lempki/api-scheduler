@@ -21,7 +21,7 @@ uv sync
 if [ ! -f ".env" ]; then
     cp .env.template .env
     echo "Created .env from .env.template."
-    echo "  > Edit .env and set DISCORD_API_SECRET before running the API."
+    echo "  > Edit .env and set API_SECRET before running the API."
 else
     echo ".env already exists, skipping."
 fi

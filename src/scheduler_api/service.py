@@ -1,4 +1,4 @@
-"""Settings and metadata that every discord-api-* service shares.
+"""Settings and metadata that every api-* service shares.
 
 A service's config.py subclasses ServiceSettings and adds only its own fields.
 """
@@ -23,7 +23,7 @@ class ServiceSettings(BaseSettings):
     """The settings every service reads from the environment or from .env.
 
     Attributes:
-        discord_api_secret: The bearer token that callers must send. It is never logged or printed.
+        api_secret: The bearer token that callers must send. It is never logged or printed.
         log_level: The minimum level of log records to emit.
     """
 
@@ -35,20 +35,20 @@ class ServiceSettings(BaseSettings):
         hide_input_in_errors=True,
     )
 
-    discord_api_secret: SecretStr
+    api_secret: SecretStr
     log_level: LogLevel = "INFO"
 
-    @field_validator("discord_api_secret")
+    @field_validator("api_secret")
     @classmethod
     def _reject_weak_secret(cls, secret: SecretStr) -> SecretStr:
         value = secret.get_secret_value()
         if value.strip().lower() in _PLACEHOLDER_SECRETS:
             raise ValueError(
-                "DISCORD_API_SECRET is still a placeholder. Generate a real secret."
+                "API_SECRET is still a placeholder. Generate a real secret."
             )
         if len(value) < MIN_SECRET_LENGTH:
             raise ValueError(
-                f"DISCORD_API_SECRET must be at least {MIN_SECRET_LENGTH} characters."
+                f"API_SECRET must be at least {MIN_SECRET_LENGTH} characters."
             )
         return secret
 
@@ -60,7 +60,7 @@ def service_version(distribution: str) -> str:
     The health endpoint and the OpenAPI docs read it from the installed package.
 
     Args:
-        distribution: The project name from pyproject.toml, such as "discord-api-media".
+        distribution: The project name from pyproject.toml, such as "api-media".
 
     Returns:
         The version, or "0.0.0" when the project is not installed.

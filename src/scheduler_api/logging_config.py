@@ -1,4 +1,4 @@
-"""Structured JSON logging for every discord-api-* service.
+"""Structured JSON logging for every api-* service.
 
 Each record becomes one JSON object per line, which log collectors can parse without guessing.
 The previous format string produced invalid JSON whenever a message contained a quote.

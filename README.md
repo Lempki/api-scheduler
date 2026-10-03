@@ -1,6 +1,6 @@
-# discord-api-scheduler
+# api-scheduler
 
-This is a REST API for scheduling persistent reminders on behalf of Discord bots. Bots register a timed reminder with a delivery destination and the API fires it at the specified time, even if the bot has restarted in the meantime. Reminders are stored in a SQLite database and restored automatically on service startup. This project is based on the [discord-api-template](https://github.com/Lempki/discord-api-template) repository, which provides the core architecture.
+This is a REST API for scheduling persistent reminders on behalf of Discord bots. Bots register a timed reminder with a delivery destination and the API fires it at the specified time, even if the bot has restarted in the meantime. Reminders are stored in a SQLite database and restored automatically on service startup. This project is based on the [api-template](https://github.com/Lempki/api-template) repository, which provides the core architecture.
 
 ## Endpoints
 
@@ -112,7 +112,7 @@ Delivery is at least once, so a restart during retries can resend a destination 
 
 Every callback request carries two headers.
 `X-Signature-Timestamp` holds the Unix time in seconds when the request was signed.
-`X-Signature-SHA256` holds the hex HMAC-SHA256 of the timestamp, a dot, and the exact request body bytes, keyed with `DISCORD_API_SECRET`.
+`X-Signature-SHA256` holds the hex HMAC-SHA256 of the timestamp, a dot, and the exact request body bytes, keyed with `API_SECRET`.
 The bot already holds this secret, because it sends the same value as its bearer token.
 
 The receiver recomputes the signature over the raw body before parsing it, compares the two in constant time, and rejects a timestamp older than 5 minutes.
@@ -174,7 +174,7 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
-The script runs `uv sync`, which creates the `.venv` virtual environment if needed and installs the package with its locked dependencies. It copies `.env.template` to `.env` on the first run. You must edit `.env` and set `DISCORD_API_SECRET` before starting the API.
+The script runs `uv sync`, which creates the `.venv` virtual environment if needed and installs the package with its locked dependencies. It copies `.env.template` to `.env` on the first run. You must edit `.env` and set `API_SECRET` before starting the API.
 Outside Docker, also set `SCHEDULER_DB_PATH` to a file in a directory that exists, such as `scheduler.db`, because the default `/data` directory exists only in the container.
 
 If you prefer to perform the setup manually, follow these steps:
@@ -182,7 +182,7 @@ If you prefer to perform the setup manually, follow these steps:
 ```bash
 uv sync
 cp .env.template .env
-# Edit .env and set DISCORD_API_SECRET, SCHEDULER_DB_PATH, and other values as needed.
+# Edit .env and set API_SECRET, SCHEDULER_DB_PATH, and other values as needed.
 uv run uvicorn scheduler_api.main:app --port 8004
 ```
 
@@ -190,7 +190,7 @@ uv run uvicorn scheduler_api.main:app --port 8004
 
 Alternatively, you can run the API as a Docker container.
 
-1. Copy `.env.template` to `.env` and set `DISCORD_API_SECRET`.
+1. Copy `.env.template` to `.env` and set `API_SECRET`.
 2. Build and start the container:
 
    ```
@@ -207,7 +207,7 @@ All configuration is read from environment variables or from a `.env` file in th
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `DISCORD_API_SECRET` | Yes | None | Shared bearer token of at least 16 characters. All Discord bots must send this value in the `Authorization` header. The service refuses to start with a placeholder such as `changeme`. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"`. |
+| `API_SECRET` | Yes | None | Shared bearer token of at least 16 characters. Every client must send this value in the `Authorization` header. The service refuses to start with a placeholder such as `changeme`. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"`. |
 | `SCHEDULER_DB_PATH` | No | `/data/scheduler.db` | Path to the SQLite database file. The directory must exist and be writable, and the file is created on first start. |
 | `LOG_LEVEL` | No | `INFO` | Log verbosity. Accepts `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
 | `DISPATCHER_MAX_RETRIES` | No | `3` | Number of delivery retry attempts before a reminder is marked as failed. It must be 0 or more. |
@@ -219,7 +219,7 @@ The service logs one JSON object per line, including uvicorn's access log.
 ## Project structure
 
 ```
-discord-api-scheduler/
+api-scheduler/
 ├── src/scheduler_api/
 │   ├── main.py             # FastAPI application and route definitions.
 │   ├── config.py           # This service's settings on top of ServiceSettings.

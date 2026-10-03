@@ -35,7 +35,7 @@ async def require_auth(
     """
     if credentials is None:
         raise _unauthorized("Missing bearer token.")
-    expected = settings.discord_api_secret.get_secret_value().encode()
+    expected = settings.api_secret.get_secret_value().encode()
     # A constant-time comparison does not reveal how much of a guessed token was correct.
     if not secrets.compare_digest(credentials.credentials.encode(), expected):
         raise _unauthorized("Invalid bearer token.")

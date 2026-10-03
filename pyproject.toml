@@ -3,7 +3,7 @@ requires = ["hatchling>=1.32.4"]
 build-backend = "hatchling.build"
 
 [project]
-name = "discord-api-scheduler"
+name = "api-scheduler"
 version = "1.0.0"
 license = "MIT"
 license-files = ["LICENSE"]

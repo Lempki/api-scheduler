@@ -73,7 +73,7 @@ def sign_callback(secret: str, timestamp: str, body: bytes) -> str:
     """Computes the signature that a bot callback carries in X-Signature-SHA256.
 
     Args:
-        secret: The shared DISCORD_API_SECRET.
+        secret: The shared API_SECRET.
         timestamp: The Unix time in seconds, as sent in X-Signature-Timestamp.
         body: The exact request body bytes.
 
@@ -205,7 +205,7 @@ async def _send(
             if destination.kind == "webhook":
                 response = await _post_webhook(destination.url, reminder["payload"])
             else:
-                secret = settings.discord_api_secret.get_secret_value()
+                secret = settings.api_secret.get_secret_value()
                 response = await _post_callback(destination.url, reminder, secret)
         except httpx.HTTPError as exc:
             logger.warning(

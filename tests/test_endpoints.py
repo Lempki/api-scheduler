@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 SECRET = "test-secret-0123456789"
-os.environ["DISCORD_API_SECRET"] = SECRET
+os.environ["API_SECRET"] = SECRET
 os.environ.setdefault("SCHEDULER_DB_PATH", ":memory:")
 
 from scheduler_api.config import Settings, get_settings  # noqa: E402
@@ -245,9 +245,9 @@ def test_health_includes_version() -> None:
 def test_health_reports_the_package_version() -> None:
     with _make_client() as client:
         r = client.get("/health")
-    assert r.json()["service"] == "discord-api-scheduler"
+    assert r.json()["service"] == "api-scheduler"
     assert r.json()["version"] == VERSION
-    assert VERSION == service_version("discord-api-scheduler") != "0.0.0"
+    assert VERSION == service_version("api-scheduler") != "0.0.0"
 
 
 @pytest.mark.parametrize(
@@ -401,13 +401,13 @@ def test_allowed_callback_hosts_parse_from_the_environment(
     monkeypatch: pytest.MonkeyPatch, raw: str
 ) -> None:
     monkeypatch.setenv("ALLOWED_CALLBACK_HOSTS", raw)
-    settings = Settings(discord_api_secret=SECRET)
+    settings = Settings(api_secret=SECRET)
     assert settings.allowed_callback_hosts == ["a.example.com", "b.example.com"]
 
 
 def test_negative_max_retries_are_refused() -> None:
     with pytest.raises(ValidationError):
-        Settings(discord_api_secret=SECRET, dispatcher_max_retries=-1)
+        Settings(api_secret=SECRET, dispatcher_max_retries=-1)
 
 
 def test_list_orders_by_instant_across_offsets() -> None:
