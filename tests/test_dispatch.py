@@ -91,7 +91,9 @@ async def _fire(reminder: dict[str, Any], max_retries: int = 3) -> dict[str, Any
     return row
 
 
-async def test_2xx_marks_the_reminder_fired(db, sleeps, monkeypatch):
+async def test_2xx_marks_the_reminder_fired(
+    db: None, sleeps: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
     recorder = Recorder(httpx.Response(200, json={"id": "1"}))
     _use_transport(monkeypatch, recorder)
     row = await _fire(_reminder())
@@ -103,7 +105,9 @@ async def test_2xx_marks_the_reminder_fired(db, sleeps, monkeypatch):
     assert json.loads(request.content) == DISCORD_BODY
 
 
-async def test_webhook_keeps_thread_id_and_asks_for_components(db, sleeps, monkeypatch):
+async def test_webhook_keeps_thread_id_and_asks_for_components(
+    db: None, sleeps: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
     recorder = Recorder(httpx.Response(200))
     _use_transport(monkeypatch, recorder)
     body = {**DISCORD_BODY, "components": [{"type": 1, "components": []}]}
@@ -115,7 +119,9 @@ async def test_webhook_keeps_thread_id_and_asks_for_components(db, sleeps, monke
     assert params["with_components"] == "true"
 
 
-async def test_400_marks_failed_without_retry(db, sleeps, monkeypatch):
+async def test_400_marks_failed_without_retry(
+    db: None, sleeps: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
     recorder = Recorder(
         httpx.Response(400, json={"message": "Cannot send an empty message"})
     )
@@ -127,7 +133,9 @@ async def test_400_marks_failed_without_retry(db, sleeps, monkeypatch):
     assert sleeps == []
 
 
-async def test_429_waits_retry_after_without_using_a_retry(db, sleeps, monkeypatch):
+async def test_429_waits_retry_after_without_using_a_retry(
+    db: None, sleeps: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
     recorder = Recorder(
         httpx.Response(429, json={"retry_after": 1.5, "global": False}),
         httpx.Response(200),
@@ -140,7 +148,9 @@ async def test_429_waits_retry_after_without_using_a_retry(db, sleeps, monkeypat
     assert len(recorder.requests) == 2
 
 
-async def test_429_falls_back_to_the_header_and_caps_the_wait(db, sleeps, monkeypatch):
+async def test_429_falls_back_to_the_header_and_caps_the_wait(
+    db: None, sleeps: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
     recorder = Recorder(
         httpx.Response(429, text="slow down", headers={"Retry-After": "120"}),
         httpx.Response(204),
@@ -151,7 +161,9 @@ async def test_429_falls_back_to_the_header_and_caps_the_wait(db, sleeps, monkey
     assert sleeps == [60.0]
 
 
-async def test_500_uses_the_retry_schedule(db, sleeps, monkeypatch):
+async def test_500_uses_the_retry_schedule(
+    db: None, sleeps: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
     recorder = Recorder(httpx.Response(500), httpx.Response(502), httpx.Response(200))
     _use_transport(monkeypatch, recorder)
     row = await _fire(_reminder())
@@ -160,7 +172,9 @@ async def test_500_uses_the_retry_schedule(db, sleeps, monkeypatch):
     assert sleeps == [30, 120]
 
 
-async def test_500_until_retries_run_out_marks_failed(db, sleeps, monkeypatch):
+async def test_500_until_retries_run_out_marks_failed(
+    db: None, sleeps: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
     recorder = Recorder(httpx.Response(500))
     _use_transport(monkeypatch, recorder)
     row = await _fire(_reminder(), max_retries=2)
@@ -169,7 +183,9 @@ async def test_500_until_retries_run_out_marks_failed(db, sleeps, monkeypatch):
     assert sleeps == [30, 120]
 
 
-async def test_network_error_is_retried(db, sleeps, monkeypatch):
+async def test_network_error_is_retried(
+    db: None, sleeps: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -184,7 +200,9 @@ async def test_network_error_is_retried(db, sleeps, monkeypatch):
     assert sleeps == [30]
 
 
-async def test_a_delivered_destination_is_not_sent_again(db, sleeps, monkeypatch):
+async def test_a_delivered_destination_is_not_sent_again(
+    db: None, sleeps: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
     hits: dict[str, int] = {"discord.com": 0, "my-bot.example.com": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -199,7 +217,9 @@ async def test_a_delivered_destination_is_not_sent_again(db, sleeps, monkeypatch
     assert hits == {"discord.com": 1, "my-bot.example.com": 2}
 
 
-async def test_cancel_during_a_retry_wait_stops_delivery(db, monkeypatch):
+async def test_cancel_during_a_retry_wait_stops_delivery(
+    db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     recorder = Recorder(httpx.Response(500), httpx.Response(200))
     _use_transport(monkeypatch, recorder)
 
@@ -214,7 +234,9 @@ async def test_cancel_during_a_retry_wait_stops_delivery(db, monkeypatch):
     assert len(recorder.requests) == 1
 
 
-async def test_cancel_during_a_rate_limit_wait_stops_delivery(db, monkeypatch):
+async def test_cancel_during_a_rate_limit_wait_stops_delivery(
+    db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     recorder = Recorder(
         httpx.Response(429, json={"retry_after": 0.5}), httpx.Response(200)
     )
@@ -229,7 +251,9 @@ async def test_cancel_during_a_rate_limit_wait_stops_delivery(db, monkeypatch):
     assert len(recorder.requests) == 1
 
 
-async def test_a_cancelled_reminder_is_not_sent_or_overwritten(db, sleeps, monkeypatch):
+async def test_a_cancelled_reminder_is_not_sent_or_overwritten(
+    db: None, sleeps: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
     recorder = Recorder(httpx.Response(200))
     _use_transport(monkeypatch, recorder)
     reminder = _reminder()
@@ -242,7 +266,7 @@ async def test_a_cancelled_reminder_is_not_sent_or_overwritten(db, sleeps, monke
     assert recorder.requests == []
 
 
-async def test_conditional_update_reports_whether_a_row_changed(db):
+async def test_conditional_update_reports_whether_a_row_changed(db: None) -> None:
     await database.insert_reminder(_reminder())
     assert await database.update_status("r1", "fired", only_if="scheduled")
     assert not await database.update_status("r1", "failed", only_if="scheduled")
@@ -262,7 +286,9 @@ def verify_callback(
     return hmac.compare_digest(expected, signature)
 
 
-async def test_callback_is_signed_and_carries_the_envelope(db, sleeps, monkeypatch):
+async def test_callback_is_signed_and_carries_the_envelope(
+    db: None, sleeps: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
     recorder = Recorder(httpx.Response(200))
     _use_transport(monkeypatch, recorder)
     free_form = {"role": "Raiders"}
@@ -319,7 +345,9 @@ async def _status(reminder_id: str) -> str:
     return str(row["status"])
 
 
-async def test_startup_fires_an_overdue_reminder_under_fire(startup_env, monkeypatch):
+async def test_startup_fires_an_overdue_reminder_under_fire(
+    startup_env: Callable[[str], None], monkeypatch: pytest.MonkeyPatch
+) -> None:
     startup_env("fire")
     recorder = Recorder(httpx.Response(200))
     _use_transport(monkeypatch, recorder)
@@ -338,7 +366,9 @@ async def test_startup_fires_an_overdue_reminder_under_fire(startup_env, monkeyp
     assert len(recorder.requests) == 1
 
 
-async def test_startup_fails_an_overdue_reminder_under_fail(startup_env, monkeypatch):
+async def test_startup_fails_an_overdue_reminder_under_fail(
+    startup_env: Callable[[str], None], monkeypatch: pytest.MonkeyPatch
+) -> None:
     startup_env("fail")
     recorder = Recorder(httpx.Response(200))
     _use_transport(monkeypatch, recorder)

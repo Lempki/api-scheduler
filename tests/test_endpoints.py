@@ -3,6 +3,7 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -49,12 +50,12 @@ def configure(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., None]]:
     get_settings.cache_clear()
 
 
-def _post(body: dict[str, Any]) -> Any:
+def _post(body: dict[str, Any]) -> httpx.Response:
     with _make_client() as client:
         return client.post("/reminders", json=body, headers=AUTH)
 
 
-def test_health():
+def test_health() -> None:
     with _make_client() as client:
         r = client.get("/health")
     assert r.status_code == 200
@@ -63,18 +64,18 @@ def test_health():
     assert data["scheduler"] == "running"
 
 
-def test_health_reports_stopped_scheduler_without_lifespan():
+def test_health_reports_stopped_scheduler_without_lifespan() -> None:
     r = TestClient(app).get("/health")
     assert r.json()["scheduler"] == "stopped"
 
 
-def test_create_reminder_requires_auth():
+def test_create_reminder_requires_auth() -> None:
     with _make_client() as client:
         r = client.post("/reminders", json=_REMINDER_BODY)
     assert r.status_code == 401
 
 
-def test_create_and_get_reminder():
+def test_create_and_get_reminder() -> None:
     with _make_client() as client:
         r = client.post("/reminders", json=_REMINDER_BODY, headers=AUTH)
         assert r.status_code == 201
@@ -85,7 +86,7 @@ def test_create_and_get_reminder():
         assert r2.json()["status"] == "scheduled"
 
 
-def test_webhook_payload_is_normalized_with_quiet_mentions():
+def test_webhook_payload_is_normalized_with_quiet_mentions() -> None:
     body = {**_REMINDER_BODY, "payload": {"content": "Hi @everyone.", "tts": False}}
     with _make_client() as client:
         r = client.post("/reminders", json=body, headers=AUTH)
@@ -100,7 +101,7 @@ def test_webhook_payload_is_normalized_with_quiet_mentions():
     assert stored.json()["payload"] == expected
 
 
-def test_explicit_allowed_mentions_are_kept():
+def test_explicit_allowed_mentions_are_kept() -> None:
     payload = {"content": "Hi.", "allowed_mentions": {"parse": ["users"]}}
     r = _post({**_REMINDER_BODY, "payload": payload})
     assert r.status_code == 201
@@ -116,7 +117,7 @@ def test_explicit_allowed_mentions_are_kept():
         "https://discord.com/api/webhooks/1/token?thread_id=123456789012345678",
     ],
 )
-def test_valid_webhook_urls_are_accepted(url: str):
+def test_valid_webhook_urls_are_accepted(url: str) -> None:
     assert _post({**_REMINDER_BODY, "webhook_url": url}).status_code == 201
 
 
@@ -145,7 +146,7 @@ def test_valid_webhook_urls_are_accepted(url: str):
         "no-token",
     ],
 )
-def test_invalid_webhook_urls_are_rejected(url: str):
+def test_invalid_webhook_urls_are_rejected(url: str) -> None:
     r = _post({**_REMINDER_BODY, "webhook_url": url})
     assert r.status_code == 422
     assert r.json()["detail"][0]["loc"] == ["body", "webhook_url"]
@@ -172,13 +173,13 @@ def test_invalid_webhook_urls_are_rejected(url: str):
         "unknown-field",
     ],
 )
-def test_invalid_webhook_payloads_are_rejected(payload: dict[str, Any]):
+def test_invalid_webhook_payloads_are_rejected(payload: dict[str, Any]) -> None:
     r = _post({**_REMINDER_BODY, "payload": payload})
     assert r.status_code == 422
     assert r.json()["detail"][0]["loc"][:2] == ["body", "payload"]
 
 
-def test_content_of_2000_characters_is_accepted():
+def test_content_of_2000_characters_is_accepted() -> None:
     assert (
         _post({**_REMINDER_BODY, "payload": {"content": "x" * 2000}}).status_code == 201
     )
@@ -192,7 +193,7 @@ def test_content_of_2000_characters_is_accepted():
     ],
     ids=["naive", "past"],
 )
-def test_fire_at_must_be_aware_and_in_the_future(fire_at: str):
+def test_fire_at_must_be_aware_and_in_the_future(fire_at: str) -> None:
     r = _post({**_REMINDER_BODY, "fire_at": fire_at})
     assert r.status_code == 422
     assert r.json()["detail"][0]["loc"] == ["body", "fire_at"]
@@ -207,25 +208,25 @@ def test_fire_at_must_be_aware_and_in_the_future(fire_at: str):
         ("guild_id", "98765432109876543x"),
     ],
 )
-def test_bad_snowflakes_are_rejected(field: str, value: str):
+def test_bad_snowflakes_are_rejected(field: str, value: str) -> None:
     r = _post({**_REMINDER_BODY, field: value})
     assert r.status_code == 422
     assert r.json()["detail"][0]["loc"] == ["body", field]
 
 
 @pytest.mark.parametrize("query", ["guild_id=guild-A", "status=bogus"])
-def test_list_filters_are_validated(query: str):
+def test_list_filters_are_validated(query: str) -> None:
     with _make_client() as client:
         r = client.get(f"/reminders?{query}", headers=AUTH)
     assert r.status_code == 422
 
 
-def test_reminder_missing_destination():
+def test_reminder_missing_destination() -> None:
     body = {k: v for k, v in _REMINDER_BODY.items() if k != "webhook_url"}
     assert _post(body).status_code == 422
 
 
-def test_cancel_reminder():
+def test_cancel_reminder() -> None:
     with _make_client() as client:
         r = client.post("/reminders", json=_REMINDER_BODY, headers=AUTH)
         reminder_id = r.json()["reminder_id"]
@@ -234,7 +235,7 @@ def test_cancel_reminder():
         assert r2.status_code == 204
 
 
-def test_health_includes_version():
+def test_health_includes_version() -> None:
     with _make_client() as client:
         r = client.get("/health")
     assert "version" in r.json()
@@ -266,55 +267,55 @@ def test_protected_route_rejects_without_valid_token(headers: dict[str, str]) ->
     assert r.headers["WWW-Authenticate"] == "Bearer"
 
 
-def test_create_reminder_wrong_auth():
+def test_create_reminder_wrong_auth() -> None:
     with _make_client() as client:
         r = client.post("/reminders", json=_REMINDER_BODY, headers=WRONG)
     assert r.status_code == 401
 
 
-def test_get_reminder_requires_auth():
+def test_get_reminder_requires_auth() -> None:
     with _make_client() as client:
         r = client.get("/reminders/nonexistent")
     assert r.status_code == 401
 
 
-def test_get_reminder_wrong_auth():
+def test_get_reminder_wrong_auth() -> None:
     with _make_client() as client:
         r = client.get("/reminders/nonexistent", headers=WRONG)
     assert r.status_code == 401
 
 
-def test_get_nonexistent_reminder_returns_404():
+def test_get_nonexistent_reminder_returns_404() -> None:
     with _make_client() as client:
         r = client.get("/reminders/does-not-exist", headers=AUTH)
     assert r.status_code == 404
 
 
-def test_cancel_nonexistent_reminder_returns_404():
+def test_cancel_nonexistent_reminder_returns_404() -> None:
     with _make_client() as client:
         r = client.delete("/reminders/does-not-exist", headers=AUTH)
     assert r.status_code == 404
 
 
-def test_cancel_reminder_requires_auth():
+def test_cancel_reminder_requires_auth() -> None:
     with _make_client() as client:
         r = client.delete("/reminders/any-id")
     assert r.status_code == 401
 
 
-def test_list_reminders_requires_auth():
+def test_list_reminders_requires_auth() -> None:
     with _make_client() as client:
         r = client.get("/reminders")
     assert r.status_code == 401
 
 
-def test_list_reminders_wrong_auth():
+def test_list_reminders_wrong_auth() -> None:
     with _make_client() as client:
         r = client.get("/reminders", headers=WRONG)
     assert r.status_code == 401
 
 
-def test_list_reminders_empty_initially():
+def test_list_reminders_empty_initially() -> None:
     with _make_client() as client:
         r = client.get("/reminders", headers=AUTH)
     assert r.status_code == 200
@@ -323,7 +324,7 @@ def test_list_reminders_empty_initially():
     assert data["total"] == 0
 
 
-def test_list_reminders_includes_created_reminder():
+def test_list_reminders_includes_created_reminder() -> None:
     with _make_client() as client:
         client.post("/reminders", json=_REMINDER_BODY, headers=AUTH)
         r = client.get("/reminders", headers=AUTH)
@@ -331,7 +332,7 @@ def test_list_reminders_includes_created_reminder():
     assert r.json()["total"] == 1
 
 
-def test_list_reminders_filter_by_guild_id_and_status():
+def test_list_reminders_filter_by_guild_id_and_status() -> None:
     guild_a = "111111111111111111"
     guild_b = "222222222222222222"
     with _make_client() as client:
@@ -357,14 +358,16 @@ _CALLBACK_BODY: dict[str, Any] = {
 }
 
 
-def test_callback_only_reminder_keeps_a_free_form_payload(configure):
+def test_callback_only_reminder_keeps_a_free_form_payload(
+    configure: Callable[..., None],
+) -> None:
     configure(ALLOWED_CALLBACK_HOSTS="other.example.com, My-Bot.example.com")
     r = _post(_CALLBACK_BODY)
     assert r.status_code == 201
     assert r.json()["payload"] == _CALLBACK_BODY["payload"]
 
 
-def test_callbacks_are_refused_by_default(configure):
+def test_callbacks_are_refused_by_default(configure: Callable[..., None]) -> None:
     configure(ALLOWED_CALLBACK_HOSTS="")
     r = _post(_CALLBACK_BODY)
     assert r.status_code == 422
@@ -380,7 +383,9 @@ def test_callbacks_are_refused_by_default(configure):
         "ftp://my-bot.example.com/callback",
     ],
 )
-def test_callback_hosts_outside_the_allowlist_are_rejected(configure, url: str):
+def test_callback_hosts_outside_the_allowlist_are_rejected(
+    configure: Callable[..., None], url: str
+) -> None:
     configure(ALLOWED_CALLBACK_HOSTS='["my-bot.example.com"]')
     r = _post({**_CALLBACK_BODY, "bot_callback_url": url})
     assert r.status_code == 422
@@ -394,18 +399,18 @@ def test_callback_hosts_outside_the_allowlist_are_rejected(configure, url: str):
 )
 def test_allowed_callback_hosts_parse_from_the_environment(
     monkeypatch: pytest.MonkeyPatch, raw: str
-):
+) -> None:
     monkeypatch.setenv("ALLOWED_CALLBACK_HOSTS", raw)
     settings = Settings(discord_api_secret=SECRET)
     assert settings.allowed_callback_hosts == ["a.example.com", "b.example.com"]
 
 
-def test_negative_max_retries_are_refused():
+def test_negative_max_retries_are_refused() -> None:
     with pytest.raises(ValidationError):
         Settings(discord_api_secret=SECRET, dispatcher_max_retries=-1)
 
 
-def test_list_orders_by_instant_across_offsets():
+def test_list_orders_by_instant_across_offsets() -> None:
     # Sorted as raw strings these would come out as 06:00Z, 08:00Z, 07:00Z.
     fire_times = {
         "07:00Z": "2099-01-01T12:00:00+05:00",

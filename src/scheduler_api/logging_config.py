@@ -16,6 +16,7 @@ class JsonFormatter(logging.Formatter):
     """Renders a log record as a single line of JSON."""
 
     def format(self, record: logging.LogRecord) -> str:
+        """Returns the record as one JSON object, with the traceback when there is one."""
         payload: dict[str, Any] = {
             "time": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
             "level": record.levelname,

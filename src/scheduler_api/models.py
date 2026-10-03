@@ -169,6 +169,12 @@ class CreateReminderRequest(BaseModel):
 
 
 class ReminderResponse(BaseModel):
+    """A stored reminder as the API returns it.
+
+    For a webhook reminder, the payload is the normalized Discord body.
+    For a callback-only reminder, it is the free-form object that was sent.
+    """
+
     reminder_id: str
     fire_at: datetime
     channel_id: str
@@ -182,6 +188,8 @@ class ReminderResponse(BaseModel):
 
 
 class ReminderListResponse(BaseModel):
+    """One page of reminders, with the total number of matches and the paging values used."""
+
     reminders: list[ReminderResponse]
     total: int
     limit: int
@@ -189,6 +197,8 @@ class ReminderListResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
+    """The body of GET /health, with the scheduler state and the number of pending jobs."""
+
     status: str
     service: str
     version: str

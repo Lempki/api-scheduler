@@ -10,6 +10,11 @@ _conn: aiosqlite.Connection | None = None
 
 
 async def init(db_path: str) -> None:
+    """Opens the database connection and creates the reminders table when it is missing.
+
+    Args:
+        db_path: The path to the SQLite database file, or ":memory:" for an in-memory database.
+    """
     global _db_path, _conn
     _db_path = db_path
     _conn = await aiosqlite.connect(db_path)
@@ -35,6 +40,7 @@ async def init(db_path: str) -> None:
 
 
 async def close() -> None:
+    """Closes the database connection, if one is open."""
     global _conn
     if _conn:
         await _conn.close()
@@ -53,6 +59,11 @@ def _get_conn() -> aiosqlite.Connection:
 
 
 async def insert_reminder(reminder: dict[str, Any]) -> None:
+    """Stores a new reminder row.
+
+    Args:
+        reminder: The reminder fields. The payload is stored as JSON text.
+    """
     db = _get_conn()
     await db.execute(
         """
@@ -78,6 +89,11 @@ async def insert_reminder(reminder: dict[str, Any]) -> None:
 
 
 async def get_reminder(reminder_id: str) -> dict[str, Any] | None:
+    """Returns one reminder as a dict, or None when no reminder has this ID.
+
+    Args:
+        reminder_id: The reminder to look up.
+    """
     db = _get_conn()
     async with db.execute(
         "SELECT * FROM reminders WHERE reminder_id = ?", (reminder_id,)
@@ -127,6 +143,17 @@ async def list_reminders(
     limit: int,
     offset: int,
 ) -> tuple[list[dict[str, Any]], int]:
+    """Returns one page of reminders, ordered by fire time, and the total count of matches.
+
+    Args:
+        guild_id: Only reminders for this guild, or None for every guild.
+        status: Only reminders with this status, or None for every status.
+        limit: The largest number of reminders to return.
+        offset: The number of matching reminders to skip.
+
+    Returns:
+        The reminders on the page and the number of reminders that match the filters.
+    """
     db = _get_conn()
     conditions = []
     params: list[Any] = []
@@ -153,6 +180,7 @@ async def list_reminders(
 
 
 async def get_scheduled_reminders() -> list[dict[str, Any]]:
+    """Returns every reminder whose status is still scheduled."""
     db = _get_conn()
     async with db.execute("SELECT * FROM reminders WHERE status = 'scheduled'") as cur:
         rows = await cur.fetchall()
@@ -160,6 +188,10 @@ async def get_scheduled_reminders() -> list[dict[str, Any]]:
 
 
 def _row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
+    """Converts a row to a dict and decodes its payload.
+
+    The callback_url column is returned as bot_callback_url, the name the API uses.
+    """
     d = dict(row)
     d["payload"] = json.loads(d["payload"])
     d["bot_callback_url"] = d.pop("callback_url", None)

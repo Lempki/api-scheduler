@@ -117,6 +117,7 @@ async def list_reminders(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> ReminderListResponse:
+    """Lists reminders, ordered by fire time, with optional guild and status filters."""
     return await reminder_store.list_reminders(guild_id, reminder_status, limit, offset)
 
 
@@ -126,6 +127,11 @@ async def list_reminders(
     dependencies=[Depends(require_auth)],
 )
 async def get_reminder(reminder_id: str) -> ReminderResponse:
+    """Returns one reminder with its current status.
+
+    Raises:
+        HTTPException: 404 when no reminder has this ID.
+    """
     result = await reminder_store.get(reminder_id)
     if result is None:
         raise HTTPException(
@@ -140,6 +146,11 @@ async def get_reminder(reminder_id: str) -> ReminderResponse:
     dependencies=[Depends(require_auth)],
 )
 async def cancel_reminder(reminder_id: str) -> None:
+    """Cancels a reminder that has not fired yet and answers 204.
+
+    Raises:
+        HTTPException: 404 when the reminder does not exist or is no longer scheduled.
+    """
     cancelled = await reminder_store.cancel(reminder_id)
     if not cancelled:
         raise HTTPException(
