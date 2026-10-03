@@ -1,6 +1,7 @@
 """The SQLite schema and async query helpers."""
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 import aiosqlite
@@ -36,7 +37,34 @@ async def init(db_path: str) -> None:
         )
         """
     )
+    await _normalize_fire_times(_conn)
     await _conn.commit()
+
+
+async def _normalize_fire_times(db: aiosqlite.Connection) -> int:
+    """Rewrites every stored fire_at in UTC, so ORDER BY fire_at sorts by time.
+
+    Reminders created before fire_at was stored in UTC kept the caller's offset.
+    Sorted as text, such times come out in the wrong order.
+    The rewrite is idempotent, so it runs at every start.
+
+    Args:
+        db: The open connection.
+
+    Returns:
+        How many rows were rewritten.
+    """
+    async with db.execute("SELECT reminder_id, fire_at FROM reminders") as cur:
+        rows = await cur.fetchall()
+    updates = []
+    for reminder_id, fire_at in rows:
+        normalized = datetime.fromisoformat(fire_at).astimezone(UTC).isoformat()
+        if normalized != fire_at:
+            updates.append((normalized, reminder_id))
+    await db.executemany(
+        "UPDATE reminders SET fire_at = ? WHERE reminder_id = ?", updates
+    )
+    return len(updates)
 
 
 async def close() -> None:

@@ -381,3 +381,30 @@ async def test_startup_fails_an_overdue_reminder_under_fail(
         assert await _status("r2") == "scheduled"
         assert scheduler.pending_count() == 1
     assert recorder.requests == []
+
+
+async def test_init_rewrites_old_fire_times_in_utc(tmp_path: Path) -> None:
+    path = str(tmp_path / "old.db")
+    await database.init(path)
+    for reminder_id, fire_at in [
+        ("a", "2099-01-01T12:00:00+05:00"),
+        ("b", "2099-01-01T08:00:00+00:00"),
+        ("c", "2099-01-01T03:00:00-03:00"),
+    ]:
+        await database.insert_reminder(
+            _reminder(reminder_id=reminder_id, fire_at=fire_at)
+        )
+    await database.close()
+
+    # Reopening applies the rewrite to rows stored before fire_at was kept in UTC.
+    await database.init(path)
+    try:
+        rows, _ = await database.list_reminders(None, None, 10, 0)
+    finally:
+        await database.close()
+
+    assert [(row["reminder_id"], row["fire_at"]) for row in rows] == [
+        ("c", "2099-01-01T06:00:00+00:00"),
+        ("a", "2099-01-01T07:00:00+00:00"),
+        ("b", "2099-01-01T08:00:00+00:00"),
+    ]
