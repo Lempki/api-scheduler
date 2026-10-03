@@ -3,7 +3,7 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -50,7 +50,7 @@ def configure(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., None]]:
     get_settings.cache_clear()
 
 
-def _post(body: dict[str, Any]) -> httpx.Response:
+def _post(body: dict[str, Any]) -> httpx2.Response:
     with _make_client() as client:
         return client.post("/reminders", json=body, headers=AUTH)
 
