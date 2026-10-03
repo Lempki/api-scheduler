@@ -23,3 +23,11 @@ updates:
     groups:
       images:
         patterns: ["*"]
+
+  - package-ecosystem: pre-commit
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      hooks:
+        patterns: ["*"]
