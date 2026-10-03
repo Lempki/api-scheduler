@@ -1,9 +1,5 @@
 extend = ".ruff-base.toml"
 
-[lint]
-# Docstring and annotation rules are switched on once the existing code meets them.
-extend-ignore = ["D", "ANN"]
-
 [lint.isort]
 known-first-party = ["scheduler_api"]
 
