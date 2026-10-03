@@ -1,5 +1,5 @@
-# Shared editor settings for the Discord bot and API repositories.
-# This file is managed by discord-dev-standards. Change it there, not here.
+# Shared editor settings for every repository that uses dev-standards.
+# This file is managed by dev-standards. Change it there, not here.
 # EditorConfig covers whitespace and encoding only. Ruff and the check-prose hook cover the rest.
 
 root = true

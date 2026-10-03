@@ -1,5 +1,5 @@
-# Shared ruff baseline for the Discord bot and API repositories.
-# This file is managed by discord-dev-standards. Change it there, not here.
+# Shared ruff baseline for every Python repository that uses dev-standards.
+# This file is managed by dev-standards. Change it there, not here.
 # Each repository's ruff.toml extends this file and adds only repository-specific settings.
 
 line-length = 88

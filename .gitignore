@@ -1,4 +1,4 @@
-# >>> dev-standards managed block. Change it in discord-dev-standards.
+# >>> dev-standards managed block. Change it in dev-standards.
 .env
 .venv/
 venv/

@@ -6,7 +6,8 @@ At fire time the service delivers each reminder to a webhook or bot callback URL
 A webhook reminder's `payload` is a validated Discord Execute Webhook body, which is posted to Discord as is.
 A bot callback receives an envelope signed with HMAC-SHA256 under `API_SECRET`, and only hosts in `ALLOWED_CALLBACK_HOSTS` are accepted.
 This project is based on [api-template](https://github.com/Lempki/api-template).
-The shared conventions live in [discord-dev-standards](https://github.com/Lempki/discord-dev-standards), and its README is the rulebook for code, prose, and commits.
+The shared conventions live in [dev-standards](https://github.com/Lempki/dev-standards), and its README is the rulebook for code, prose, commits, and engineering guidelines.
+Read it before changing code. When the repositories are cloned side by side, the local copy is `../dev-standards/README.md`.
 
 ## Commands
 
