@@ -8,8 +8,8 @@ This is a REST API for scheduling persistent reminders on behalf of Discord bots
 |---|---|---|
 | `POST` | `/reminders` | Register a new timed reminder. |
 | `GET` | `/reminders` | List reminders, optionally filtered by guild or status. |
-| `GET` | `/reminders/{reminder_id}` | Get the status and details of a specific reminder. |
-| `DELETE` | `/reminders/{reminder_id}` | Cancel a pending reminder. |
+| `GET` | `/reminders/{reminder_id}` | Get the status and details of a specific reminder. An unknown ID gets `404`. |
+| `DELETE` | `/reminders/{reminder_id}` | Cancel a reminder that is still scheduled. Answers `204 No Content`, or `404` when the reminder does not exist or has already fired, failed, or been cancelled. |
 | `GET` | `/health` | Returns the service name, version, scheduler status, and pending job count. The Docker image also uses it as its health check. |
 
 All endpoints except `/health` require a bearer token in the `Authorization` header.
@@ -25,7 +25,7 @@ These changes break clients written for the previous version.
 * `bot_callback_url` is refused unless its host is listed in `ALLOWED_CALLBACK_HOSTS`, which is empty by default.
 * Every bot callback carries a signature that the receiver should verify.
 * `fire_at` must include a timezone offset and lie in the future.
-* `channel_id` and `guild_id` must be Discord snowflakes of 17 to 20 digits. The `guild_id` and `status` filters of `GET /reminders` are validated the same way.
+* `channel_id` and `guild_id` must be Discord snowflakes of 17 to 20 digits. The `guild_id` filter of `GET /reminders` is validated the same way, and its `status` filter accepts only the four reminder statuses.
 * A reminder that came due while the service was down now fires at startup instead of being dropped. Set `MISSED_REMINDER_POLICY=fail` to mark such reminders failed instead.
 
 ### POST /reminders
@@ -67,7 +67,7 @@ The stored and returned `payload` is the normalized body, including that default
 When only `bot_callback_url` is set, `payload` is a free-form JSON object that is passed to the bot unchanged.
 `bot_callback_url` must be an `http` or `https` URL whose hostname is listed in `ALLOWED_CALLBACK_HOSTS`.
 
-Returns the created reminder including its assigned `reminder_id` and a `status` of `"scheduled"`.
+Returns `201 Created` with the created reminder, including its assigned `reminder_id` and a `status` of `"scheduled"`.
 
 ### Delivery
 
@@ -97,9 +97,9 @@ The answers are handled as follows.
 | Answer | Handling |
 |---|---|
 | 2xx | The destination succeeded. |
-| 429 | The service waits for the `retry_after` value of the JSON body, or else the `Retry-After` header, capped at 60 seconds. It then resends without using up a retry, at most three times in a row. |
+| 429 | The service waits for the `retry_after` value of the JSON body, or else the `Retry-After` header, capped at 60 seconds. It then resends without using up a retry, at most three times in a row. A fourth 429 in a row counts as a transient failure, like a 5xx. |
 | Other 4xx | The error is permanent. The reminder is marked `"failed"` at once, and the status and the start of the response body are logged. |
-| 5xx or a network error | The attempt is retried up to `DISPATCHER_MAX_RETRIES` times, after 30 seconds, 2 minutes, and 10 minutes. |
+| 5xx or a network error | The attempt is retried up to `DISPATCHER_MAX_RETRIES` times, after 30 seconds, 2 minutes, and 10 minutes. Any later retry also waits 10 minutes. |
 
 After all retries are used, the reminder is marked `"failed"` and will not be retried further.
 A reminder cancelled during a wait between sends is not sent again and stays `"cancelled"`.
@@ -175,13 +175,14 @@ chmod +x setup.sh
 ```
 
 The script runs `uv sync`, which creates the `.venv` virtual environment if needed and installs the package with its locked dependencies. It copies `.env.template` to `.env` on the first run. You must edit `.env` and set `DISCORD_API_SECRET` before starting the API.
+Outside Docker, also set `SCHEDULER_DB_PATH` to a file in a directory that exists, such as `scheduler.db`, because the default `/data` directory exists only in the container.
 
 If you prefer to perform the setup manually, follow these steps:
 
 ```bash
 uv sync
 cp .env.template .env
-# Edit .env and set DISCORD_API_SECRET and other values as needed.
+# Edit .env and set DISCORD_API_SECRET, SCHEDULER_DB_PATH, and other values as needed.
 uv run uvicorn scheduler_api.main:app --port 8004
 ```
 
@@ -193,10 +194,11 @@ Alternatively, you can run the API as a Docker container.
 2. Build and start the container:
 
    ```
-   docker-compose up --build
+   docker compose up --build
    ```
 
-The container runs on port `8000` internally. Docker Compose maps it to port `8004` on the host. The Docker Compose configuration also creates a named volume for the SQLite database so that reminders persist across container restarts.
+The container runs on port `8000` internally. Docker Compose maps it to port `8004` on the host. The Docker Compose configuration mounts the named volume `scheduler_data` at `/data`, which holds the SQLite database `/data/scheduler.db`.
+Reminders therefore persist across container restarts and rebuilds, until the volume itself is removed, for example with `docker compose down -v`.
 The image has a health check that calls `/health`, so Docker marks the container unhealthy when the service stops answering.
 
 ## Configuration
@@ -206,7 +208,7 @@ All configuration is read from environment variables or from a `.env` file in th
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `DISCORD_API_SECRET` | Yes | None | Shared bearer token of at least 16 characters. All Discord bots must send this value in the `Authorization` header. The service refuses to start with a placeholder such as `changeme`. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"`. |
-| `SCHEDULER_DB_PATH` | No | `/data/scheduler.db` | Absolute path to the SQLite database file. The directory must be writable. |
+| `SCHEDULER_DB_PATH` | No | `/data/scheduler.db` | Path to the SQLite database file. The directory must exist and be writable, and the file is created on first start. |
 | `LOG_LEVEL` | No | `INFO` | Log verbosity. Accepts `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
 | `DISPATCHER_MAX_RETRIES` | No | `3` | Number of delivery retry attempts before a reminder is marked as failed. It must be 0 or more. |
 | `ALLOWED_CALLBACK_HOSTS` | No | Empty | Hostnames that `bot_callback_url` may point to, as a comma-separated list such as `bot.example.com,localhost` or as a JSON list. While it is empty, every bot callback is refused. |

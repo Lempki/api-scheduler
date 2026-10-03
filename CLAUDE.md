@@ -14,7 +14,7 @@ The shared conventions live in [discord-dev-standards](https://github.com/Lempki
 * `uv run uvicorn scheduler_api.main:app --reload` starts the API on port 8000. It reads its settings from `.env`.
 * `uv run pytest` runs the tests.
 * `uvx pre-commit run --all-files` runs every lint and format hook.
-* `docker-compose up --build` runs the service in a container, exposed on host port 8004.
+* `docker compose up --build` runs the service in a container, exposed on host port 8004.
 
 ## Layout
 
