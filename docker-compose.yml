@@ -4,7 +4,12 @@ services:
     ports:
       - "8004:8000"
     env_file:
-      - .env
+      # Optional settings. Without the file, the secret check below explains what to do.
+      - path: .env
+        required: false
+    environment:
+      # Compose reads the secret from .env or the shell and stops with this message when it is missing.
+      DISCORD_API_SECRET: ${DISCORD_API_SECRET:?Set DISCORD_API_SECRET in .env. The README shows how to generate one.}
     volumes:
       - scheduler_data:/data
     restart: unless-stopped
