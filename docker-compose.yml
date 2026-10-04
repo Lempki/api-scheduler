@@ -1,3 +1,7 @@
+# The fixed project name keeps the containers and volumes the same, whatever this folder is called.
+# A downloaded release in a folder with a version in its name therefore finds the data of the previous one.
+name: api-scheduler
+
 services:
   scheduler:
     build: .
