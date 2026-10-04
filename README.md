@@ -195,6 +195,26 @@ cp .env.template .env
 uv run uvicorn scheduler_api.main:app --port 8004
 ```
 
+### Running
+
+After setup has run once, the run script starts the API.
+Double-click `run.bat` on Windows, or run `./run.sh` on macOS and Linux.
+It builds and starts the API in Docker in the background, waits until its health check passes, and shows its status.
+The container then starts again whenever Docker starts.
+
+The script also takes an action, such as `run.bat stop` on Windows or `./run.sh stop` elsewhere:
+
+| Action | What it does |
+|---|---|
+| `start` | Builds and starts everything in Docker and waits until it is ready. It is the default. |
+| `stop` | Stops the containers. They stay stopped until the next start. |
+| `status` | Shows whether each container runs and is healthy. |
+| `logs` | Follows the logs. Press Ctrl+C to stop following. |
+| `update` | Pulls the latest code, rebuilds on fresh base images, and restarts. |
+| `local` | Runs the project in the terminal without Docker. Press Ctrl+C to stop it. |
+
+When a service crashes right after it starts, the script shows the end of its log and stops it, so it does not restart over and over.
+
 ### Docker
 
 Alternatively, you can run the API as a Docker container.
@@ -230,26 +250,29 @@ The service logs one JSON object per line, including uvicorn's access log.
 ```
 api-scheduler/
 ├── src/scheduler_api/
-│   ├── main.py             # FastAPI application and route definitions.
-│   ├── config.py           # This service's settings on top of ServiceSettings.
-│   ├── service.py          # Shared settings, secret validation, and the version lookup.
-│   ├── logging_config.py   # Structured JSON logging, including uvicorn's loggers.
-│   ├── auth.py             # Bearer token dependency.
-│   ├── models.py           # Pydantic request and response models.
-│   ├── database.py         # SQLite schema and async query helpers.
-│   ├── reminder_store.py   # Business logic for creating, listing, and cancelling reminders.
-│   ├── scheduler.py        # APScheduler setup and job lifecycle management.
-│   └── dispatcher.py       # Webhook and signed callback delivery with retry logic.
+│   ├── main.py           # FastAPI application and route definitions.
+│   ├── config.py         # This service's settings on top of ServiceSettings.
+│   ├── service.py        # Shared settings, secret validation, and the version lookup.
+│   ├── logging_config.py # Structured JSON logging, including uvicorn's loggers.
+│   ├── auth.py           # Bearer token dependency.
+│   ├── models.py         # Pydantic request and response models.
+│   ├── database.py       # SQLite schema and async query helpers.
+│   ├── reminder_store.py # Business logic for creating, listing, and cancelling reminders.
+│   ├── scheduler.py      # APScheduler setup and job lifecycle management.
+│   └── dispatcher.py     # Webhook and signed callback delivery with retry logic.
 ├── tests/
 ├── Dockerfile
 ├── docker-compose.yml
-├── pyproject.toml      # Project metadata and dependencies.
-├── uv.lock             # Locked dependency versions.
-├── ruff.toml           # Lint and format settings on top of the shared baseline.
-├── setup.bat           # Windows setup script.
-├── setup.sh            # macOS and Linux setup script.
+├── pyproject.toml        # Project metadata and dependencies.
+├── uv.lock               # Locked dependency versions.
+├── ruff.toml             # Lint and format settings on top of the shared baseline.
+├── setup.bat             # Windows setup script.
+├── setup.sh              # macOS and Linux setup script.
 ├── scripts/bootstrap.py  # The steps that both setup scripts run.
-└── .env.template       # Template for environment variables.
+├── scripts/run.py        # The actions that both run scripts take.
+├── run.bat               # Windows run script.
+├── run.sh                # macOS and Linux run script.
+└── .env.template         # Template for environment variables.
 ```
 
 ## Running tests

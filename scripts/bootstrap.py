@@ -8,6 +8,7 @@ Every other tool is offered before it is installed, and declining one only limit
 
 The script uses the standard library only, because it runs before the dependencies exist.
 It is identical in every bot and api-* repository and finds out which kind it runs in.
+scripts/run.py reuses its helpers for the everyday actions after setup.
 """
 
 import ctypes.util
@@ -730,8 +731,16 @@ def start_docker_desktop() -> bool:
     return False
 
 
-def ensure_docker_running(report: Report) -> bool:
-    """Makes sure the Docker engine answers, offering to start Docker Desktop when it does not."""
+def ensure_docker_running(report: Report, *, ask_first: bool = True) -> bool:
+    """Makes sure the Docker engine answers, starting Docker Desktop when it does not.
+
+    Args:
+        report: The report that records the outcome.
+        ask_first: Whether to ask before starting Docker Desktop.
+
+    Returns:
+        Whether Docker answers.
+    """
     result = docker_info()
     if result is not None and result.returncode == 0:
         report.ok("Docker is running.")
@@ -741,24 +750,26 @@ def ensure_docker_running(report: Report) -> bool:
             "Docker is installed, but this user may not use it.",
             "Nothing can run in Docker from this account.",
             "Run sudo usermod -aG docker $USER, log out and back in, "
-            "and run the setup script again.",
+            "and run this script again.",
         )
         return False
     if sys.platform not in ("win32", "darwin"):
         report.problem(
             "Docker is installed but not running.",
             "Nothing can run in Docker until it starts.",
-            "Start it with sudo systemctl enable --now docker and run the setup script again.",
+            "Start it with sudo systemctl enable --now docker and run this script again.",
         )
         return False
     not_running = "Docker Desktop is not running."
     fix = (
         "Start Docker Desktop from the Start menu or Applications, "
-        "wait until it is ready, and run the setup script again."
+        "wait until it is ready, and run this script again."
     )
-    if not ask(f"{not_running} Start it now?"):
+    if ask_first and not ask(f"{not_running} Start it now?"):
         report.skip(f"{not_running} Start it before using Docker.")
         return False
+    if not ask_first:
+        print(f"  {not_running} Starting it.")
     if not start_docker_desktop():
         report.problem(
             "Docker Desktop could not be started.", "Nothing can run in Docker.", fix
@@ -802,15 +813,8 @@ def start_stack(report: Report) -> bool:
     return False
 
 
-def api_package() -> str | None:
-    """Returns the import package of an API, which is the directory under src that holds main.py."""
-    mains = sorted(REPO.glob("src/*/main.py"))
-    return mains[0].parent.name if mains else None
-
-
-def print_summary(report: Report, *, is_bot: bool, has_stack: bool) -> None:
-    """Prints what still needs attention and how to run the project."""
-    section("Summary")
+def print_problems(report: Report) -> None:
+    """Prints every problem and skipped step again, so none scrolls out of sight."""
     if report.problems:
         print(f"  {len(report.problems)} thing(s) need your attention:")
         for number, problem in enumerate(report.problems, start=1):
@@ -823,17 +827,15 @@ def print_summary(report: Report, *, is_bot: bool, has_stack: bool) -> None:
         print("  Skipped on request:")
         for message in report.skipped:
             print(f"  - {message}")
+
+
+def print_summary(report: Report) -> None:
+    """Prints what still needs attention and how to start the project."""
+    section("Summary")
+    print_problems(report)
     print()
-    if is_bot:
-        print("  Run the bot           : uv run python bot.py")
-        if has_stack:
-            print(
-                "  Run it in Docker      : docker compose -f compose.stack.yml up -d --build"
-            )
-    else:
-        package = api_package() or "<package>"
-        print(f"  Run the API           : uv run uvicorn {package}.main:app --reload")
-        print("  Run it in Docker      : docker compose up -d --build")
+    print("  Start it in Docker    : run.bat on Windows, ./run.sh elsewhere")
+    print("  Run it without Docker : run.bat local, or ./run.sh local")
     print("  Run the tests         : uv run pytest")
 
 
@@ -890,7 +892,7 @@ def main() -> int:
         if has_docker and has_siblings and has_token and ensure_docker_running(report):
             start_stack(report)
 
-    print_summary(report, is_bot=is_bot, has_stack=has_stack)
+    print_summary(report)
     return 1 if report.required_failed else 0
 
 
