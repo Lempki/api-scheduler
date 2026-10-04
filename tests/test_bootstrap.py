@@ -167,6 +167,24 @@ def test_stack_siblings_lists_each_repository_once() -> None:
     assert bootstrap.stack_siblings(compose) == ["api-media", "api-morshu"]
 
 
+def test_stack_siblings_skips_services_behind_a_profile() -> None:
+    compose = """
+services:
+  bot:
+    build: .
+  morshu:
+    build: ../api-morshu
+  media:
+    build: ../api-media
+    profiles: ["media"]
+
+volumes:
+  bot-data:
+"""
+
+    assert bootstrap.stack_siblings(compose) == ["api-morshu"]
+
+
 @pytest.mark.parametrize(
     ("origin", "expected"),
     [

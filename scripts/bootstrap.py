@@ -40,6 +40,12 @@ _REQUIRED_STACK_SECRET = re.compile(r"\$\{API_([A-Z0-9_]+)_SECRET:\?")
 # A service that compose.stack.yml builds from a repository next to this one.
 _SIBLING_BUILD = re.compile(r"^\s*build:\s*\.\./([\w.-]+)\s*$", re.MULTILINE)
 
+# A service entry in compose.stack.yml, such as "  media:" under services.
+_SERVICE_ENTRY = re.compile(r"^  [\w.-]+:\s*$")
+
+# A profiles key, which makes a service start only when one of its profiles is asked for.
+_PROFILES = re.compile(r"^\s+profiles:", re.MULTILINE)
+
 # A Discord bot token has three dot-separated parts.
 _DISCORD_TOKEN = re.compile(r"[\w-]+\.[\w-]+\.[\w-]+")
 
@@ -490,9 +496,35 @@ def required_stack_secrets(compose: str) -> list[tuple[str, str]]:
     return pairs
 
 
+def service_blocks(compose: str) -> list[str]:
+    """Splits the services section of a compose file into one text block per service.
+
+    Lines before the first top-level key count as services.
+    So a fragment without the services key works too.
+    """
+    blocks: list[list[str]] = []
+    in_services = True
+    for line in compose.splitlines():
+        if line and not line[0].isspace() and not line.startswith("#"):
+            in_services = line.startswith("services:")
+        elif in_services and _SERVICE_ENTRY.match(line):
+            blocks.append([line])
+        elif in_services and blocks:
+            blocks[-1].append(line)
+    return ["\n".join(block) for block in blocks]
+
+
 def stack_siblings(compose: str) -> list[str]:
-    """Lists the repositories that compose.stack.yml builds from the folder next to this one."""
-    return sorted(set(_SIBLING_BUILD.findall(compose)))
+    """Lists the repositories that compose.stack.yml always builds from the folder next to this one.
+
+    A service with profiles only starts when one of them is asked for, such as with --profile media.
+    Its repository is therefore optional and not listed.
+    """
+    siblings: set[str] = set()
+    for block in service_blocks(compose):
+        if not _PROFILES.search(block):
+            siblings.update(_SIBLING_BUILD.findall(block))
+    return sorted(siblings)
 
 
 def sibling_url(origin: str, name: str) -> str:
