@@ -11,6 +11,7 @@ It is identical in every bot and api-* repository and finds out which kind it ru
 scripts/run.py reuses its helpers for the everyday actions after setup.
 """
 
+import contextlib
 import ctypes.util
 import getpass
 import io
@@ -45,6 +46,9 @@ _SERVICE_ENTRY = re.compile(r"^  [\w.-]+:\s*$")
 
 # A profiles key, which makes a service start only when one of its profiles is asked for.
 _PROFILES = re.compile(r"^\s+profiles:", re.MULTILINE)
+
+# The version that GitHub adds to the folder name of a release ZIP, such as "-2.1.0".
+_VERSION_SUFFIX = re.compile(r"-v?(\d+(?:\.\d+)*)")
 
 # A Discord bot token has three dot-separated parts.
 _DISCORD_TOKEN = re.compile(r"[\w-]+\.[\w-]+\.[\w-]+")
@@ -672,25 +676,70 @@ def _fill_stack_secret(
     return set_env_value(text, variable, existing or "")
 
 
-def downloaded_copies(parent: Path, name: str) -> list[Path]:
-    """Lists the folders that a downloaded release of a repository may have extracted to.
+def release_version(folder_name: str, name: str) -> tuple[int, ...] | None:
+    """Reads the version from the name of a folder that may hold a copy of a repository.
 
     GitHub names the folder in a release ZIP after the repository and the version.
     So a download of api-media extracts to a folder such as api-media-2.1.0.
-    compose.stack.yml expects the plain repository name instead.
 
     Args:
-        parent: The folder that holds this repository and its neighbors.
+        folder_name: The name of the folder.
         name: The repository name that compose.stack.yml expects.
 
     Returns:
-        The matching folders, sorted by name.
+        The version numbers, an empty tuple for the plain name, or None for another folder.
     """
-    return sorted(p for p in parent.glob(f"{name}-*") if p.is_dir())
+    if folder_name == name:
+        return ()
+    if not folder_name.startswith(name):
+        return None
+    match = _VERSION_SUFFIX.fullmatch(folder_name[len(name) :])
+    if match is None:
+        return None
+    return tuple(int(part) for part in match.group(1).split("."))
 
 
-def rename_downloaded_copies(missing: list[str], report: Report) -> list[str]:
-    """Offers to rename downloaded release folders to the names compose.stack.yml expects.
+def search_places() -> list[Path]:
+    """Lists the folders where an extracted release of another repository may sit.
+
+    Windows' Extract All puts the top folder of a ZIP inside another folder of the same name.
+    When this repository sits in such a wrapper, the other downloads are one level higher.
+    """
+    places = [REPO.parent]
+    if REPO.parent.name == REPO.name:
+        places.append(REPO.parent.parent)
+    return places
+
+
+def find_copies(name: str) -> list[Path]:
+    """Finds the folders that hold a copy of a repository, the preferred one first.
+
+    A copy may carry a version in its name and may sit inside an Extract All wrapper.
+    A folder only counts when it holds a Dockerfile, so an unrelated folder is never moved.
+    The plain name comes first, and otherwise the newest version.
+
+    Args:
+        name: The repository name that compose.stack.yml expects.
+
+    Returns:
+        The folders that hold the repository's files.
+    """
+    ranked: list[tuple[tuple[bool, tuple[int, ...]], Path]] = []
+    for place in search_places():
+        for folder in place.iterdir():
+            version = release_version(folder.name, name)
+            if version is None or not folder.is_dir():
+                continue
+            inner = folder / folder.name
+            content = inner if inner.is_dir() else folder
+            if (content / "Dockerfile").is_file():
+                ranked.append(((version == (), version), content))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return [content for _, content in ranked]
+
+
+def move_downloaded_copies(missing: list[str], report: Report) -> list[str]:
+    """Offers to move downloaded release folders to where compose.stack.yml expects them.
 
     Args:
         missing: The repository names that were not found.
@@ -699,38 +748,45 @@ def rename_downloaded_copies(missing: list[str], report: Report) -> list[str]:
     Returns:
         The names that are still missing afterward.
     """
+    home = search_places()[-1]
     still_missing = []
     for name in missing:
-        copies = downloaded_copies(REPO.parent, name)
-        if len(copies) != 1:
+        copies = find_copies(name)
+        if not copies:
             still_missing.append(name)
             continue
-        copy = copies[0]
-        question = (
-            f"{copy.name} looks like a downloaded copy of {name}. Rename it to {name}?"
-        )
-        if not ask(question):
+        copy, target = copies[0], REPO.parent / name
+        shown_copy = os.path.relpath(copy, home)
+        shown_target = os.path.relpath(target, home)
+        newest = f", the newest of {len(copies)} copies" if len(copies) > 1 else ""
+        print(f"  Found {name} in {shown_copy}{newest}.")
+        if not ask(f"Move it to {shown_target}, where the Docker stack looks for it?"):
             still_missing.append(name)
             continue
+        wrapper = copy.parent
         try:
-            copy.rename(REPO.parent / name)
+            copy.rename(target)
         except OSError as error:
             report.problem(
-                f"Renaming {copy.name} to {name} failed: {error}",
-                "The Docker stack builds it from a folder with the plain name.",
+                f"Moving {shown_copy} to {shown_target} failed: {error}",
+                "The Docker stack builds it from that place.",
                 "Close any window or program that has the folder open, "
-                "or rename it by hand, and run the setup script again.",
+                "or move it by hand, and run the setup script again.",
             )
             still_missing.append(name)
             continue
-        report.ok(f"Renamed {copy.name} to {name}.")
+        # The empty Extract All wrapper would only confuse a later look at the folder.
+        if wrapper.name == copy.name:
+            with contextlib.suppress(OSError):
+                wrapper.rmdir()
+        report.ok(f"Moved {shown_copy} to {shown_target}.")
     return still_missing
 
 
 def ensure_siblings(compose: str, report: Report) -> bool:
     """Makes sure the repositories that compose.stack.yml builds are next to this one.
 
-    A downloaded release folder is renamed after asking.
+    A downloaded release folder is moved into place after asking.
     A repository that is still missing is cloned when this repository is a Git clone.
 
     Returns:
@@ -742,7 +798,7 @@ def ensure_siblings(compose: str, report: Report) -> bool:
             "The repositories that compose.stack.yml builds are next to this one."
         )
         return True
-    missing = rename_downloaded_copies(missing, report)
+    missing = move_downloaded_copies(missing, report)
     if not missing:
         return True
     names = ", ".join(missing)
@@ -758,8 +814,8 @@ def ensure_siblings(compose: str, report: Report) -> bool:
             f"{names} {were} not found next to this folder.",
             without_it,
             f"Download the latest release of {names} from GitHub as well. "
-            f"Extract it into {REPO.parent} and run the setup script again, "
-            "which then offers to rename the extracted folder.",
+            f"Extract it into {search_places()[-1]} and run the setup script again, "
+            "which then moves it where it belongs.",
         )
         return False
     manual_fix = f"Clone {names} into {REPO.parent} and run the setup script again."

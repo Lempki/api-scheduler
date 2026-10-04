@@ -232,28 +232,85 @@ def test_ask_without_input_answers_no(monkeypatch: pytest.MonkeyPatch) -> None:
 STACK_BUILDS_MEDIA = "  media:\n    build: ../api-media\n"
 
 
-def test_downloaded_copy_is_renamed_after_asking(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    (repo.parent / "api-media-2.1.0").mkdir()
-    monkeypatch.setattr(bootstrap, "ask", lambda _question: True)
-    report = bootstrap.Report()
+def release(folder: Path) -> Path:
+    """Creates a folder that looks like an extracted api-media release."""
+    folder.mkdir(parents=True)
+    (folder / "Dockerfile").write_text("FROM python:3.12-slim\n", encoding="utf-8")
+    return folder
 
-    assert bootstrap.ensure_siblings(STACK_BUILDS_MEDIA, report)
-    assert (repo.parent / "api-media").is_dir()
+
+@pytest.fixture
+def yes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Answers yes to every question."""
+    monkeypatch.setattr(bootstrap, "ask", lambda _question: True)
+
+
+@pytest.mark.usefixtures("yes")
+def test_versioned_copy_next_to_the_bot_is_moved_into_place(repo: Path) -> None:
+    release(repo.parent / "api-media-2.1.0")
+
+    assert bootstrap.ensure_siblings(STACK_BUILDS_MEDIA, bootstrap.Report())
+    assert (repo.parent / "api-media" / "Dockerfile").is_file()
     assert not (repo.parent / "api-media-2.1.0").exists()
 
 
-def test_two_downloaded_copies_are_never_guessed_between(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    (repo.parent / "api-media-2.0.0").mkdir()
-    (repo.parent / "api-media-2.1.0").mkdir()
-    monkeypatch.setattr(bootstrap, "ask", lambda _question: True)
-    report = bootstrap.Report()
+@pytest.mark.usefixtures("yes")
+def test_copy_inside_an_extract_all_wrapper_is_unwrapped(repo: Path) -> None:
+    release(repo.parent / "api-media-2.1.0" / "api-media-2.1.0")
 
-    assert not bootstrap.ensure_siblings(STACK_BUILDS_MEDIA, report)
-    assert not (repo.parent / "api-media").exists()
+    assert bootstrap.ensure_siblings(STACK_BUILDS_MEDIA, bootstrap.Report())
+    assert (repo.parent / "api-media" / "Dockerfile").is_file()
+    assert not (repo.parent / "api-media-2.1.0").exists()
+
+
+@pytest.mark.usefixtures("yes")
+def test_wrapped_bot_gets_the_service_next_to_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bot = tmp_path / "discord-bot-x-1.0.0" / "discord-bot-x-1.0.0"
+    bot.mkdir(parents=True)
+    monkeypatch.setattr(bootstrap, "REPO", bot)
+    release(tmp_path / "api-media-2.1.0" / "api-media-2.1.0")
+
+    assert bootstrap.ensure_siblings(STACK_BUILDS_MEDIA, bootstrap.Report())
+    assert (bot.parent / "api-media" / "Dockerfile").is_file()
+    assert not (tmp_path / "api-media-2.1.0").exists()
+
+
+@pytest.mark.usefixtures("yes")
+def test_newest_of_several_copies_is_used(repo: Path) -> None:
+    release(repo.parent / "api-media-2.0.0")
+    newest = release(repo.parent / "api-media-2.10.0")
+    (newest / "marker").write_text("", encoding="utf-8")
+    release(repo.parent / "api-media-2.9.1")
+
+    assert bootstrap.ensure_siblings(STACK_BUILDS_MEDIA, bootstrap.Report())
+    assert (repo.parent / "api-media" / "marker").is_file()
+
+
+@pytest.mark.usefixtures("yes")
+def test_unrelated_folders_are_never_moved(repo: Path) -> None:
+    (repo.parent / "api-media-notes").mkdir()
+    (repo.parent / "api-media-2.1.0").mkdir()
+
+    assert not bootstrap.ensure_siblings(STACK_BUILDS_MEDIA, bootstrap.Report())
+    assert (repo.parent / "api-media-notes").is_dir()
+    assert (repo.parent / "api-media-2.1.0").is_dir()
+
+
+@pytest.mark.parametrize(
+    ("folder_name", "version"),
+    [
+        ("api-media", ()),
+        ("api-media-2.1.0", (2, 1, 0)),
+        ("api-media-v2.1", (2, 1)),
+        ("api-media-main", None),
+        ("api-mediaserver", None),
+        ("api-morshu-2.1.0", None),
+    ],
+)
+def test_release_version(folder_name: str, version: tuple[int, ...] | None) -> None:
+    assert bootstrap.release_version(folder_name, "api-media") == version
 
 
 def test_downloaded_bot_explains_how_to_get_a_missing_service(repo: Path) -> None:
