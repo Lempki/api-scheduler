@@ -318,3 +318,88 @@ def test_downloaded_bot_explains_how_to_get_a_missing_service(repo: Path) -> Non
 
     assert not bootstrap.ensure_siblings(STACK_BUILDS_MEDIA, report)
     assert "Download the latest release of api-media" in report.problems[0].fix
+
+
+def windows(
+    *,
+    wsl: bool = True,
+    hypervisor: bool = True,
+    firmware: bool = True,
+    restart: bool = False,
+) -> object:
+    return bootstrap.Virtualization(
+        wsl_installed=wsl,
+        hypervisor_running=hypervisor,
+        firmware_enabled=firmware,
+        restart_pending=restart,
+    )
+
+
+@pytest.mark.parametrize(
+    ("state", "step"),
+    [
+        # A working machine reports the firmware as off while the hypervisor runs.
+        (windows(firmware=False), "READY"),
+        (windows(), "READY"),
+        (windows(wsl=False), "INSTALL_WSL"),
+        (windows(wsl=False, hypervisor=False, firmware=False), "INSTALL_WSL"),
+        (windows(hypervisor=False, restart=True), "RESTART"),
+        (windows(hypervisor=False, firmware=False, restart=True), "RESTART"),
+        (windows(hypervisor=False, firmware=False), "FIRMWARE"),
+        (windows(hypervisor=False), "INSTALL_WSL"),
+    ],
+)
+def test_next_virtualization_step(state: object, step: str) -> None:
+    assert (
+        bootstrap.next_virtualization_step(state) is bootstrap.VirtualizationStep[step]
+    )
+
+
+def test_firmware_problem_explains_where_to_turn_it_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        bootstrap,
+        "read_virtualization",
+        lambda: windows(hypervisor=False, firmware=False),
+    )
+    report = bootstrap.Report()
+
+    assert not bootstrap.prepare_windows_virtualization(report)
+    assert "UEFI Firmware Settings" in report.problems[0].fix
+
+
+def test_wsl_is_installed_after_asking_and_then_needs_a_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(bootstrap, "read_virtualization", lambda: windows(wsl=False))
+    monkeypatch.setattr(bootstrap, "ask", lambda _question: True)
+    monkeypatch.setattr(
+        bootstrap, "run", lambda command: commands.append(command) or True
+    )
+    report = bootstrap.Report()
+
+    assert not bootstrap.prepare_windows_virtualization(report)
+    assert commands == [["wsl.exe", "--install", "--no-distribution"]]
+    assert "restart" in report.problems[0].what
+
+
+def test_declining_wsl_installs_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(bootstrap, "read_virtualization", lambda: windows(wsl=False))
+    monkeypatch.setattr(bootstrap, "ask", lambda _question: False)
+    monkeypatch.setattr(
+        bootstrap, "run", lambda command: commands.append(command) or True
+    )
+    report = bootstrap.Report()
+
+    assert not bootstrap.prepare_windows_virtualization(report)
+    assert commands == []
+    assert report.skipped
+
+
+def test_ready_windows_lets_docker_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bootstrap, "read_virtualization", lambda: windows())
+
+    assert bootstrap.prepare_windows_virtualization(bootstrap.Report())

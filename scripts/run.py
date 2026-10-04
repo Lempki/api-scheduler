@@ -29,6 +29,7 @@ from bootstrap import (
     env_value,
     is_installed,
     is_placeholder,
+    prepare_windows_virtualization,
     print_problems,
     required_stack_secrets,
     run,
@@ -226,6 +227,8 @@ def check_docker(report: Report) -> bool:
     """Makes sure Docker is installed and running, starting Docker Desktop when needed."""
     if not is_installed(DOCKER):
         report_missing_docker(report)
+        return False
+    if sys.platform == "win32" and not prepare_windows_virtualization(report):
         return False
     return ensure_docker_running(report, ask_first=False)
 

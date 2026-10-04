@@ -23,6 +23,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -847,6 +848,168 @@ def ensure_siblings(compose: str, report: Report) -> bool:
     return True
 
 
+@dataclass(frozen=True)
+class Virtualization:
+    """What Windows reports about running virtual machines, which Docker Desktop needs.
+
+    Docker Desktop runs its containers in a WSL 2 virtual machine.
+    That needs WSL, the Windows virtual machine feature, and virtualization in the firmware.
+
+    Attributes:
+        wsl_installed: Whether wsl --status succeeds.
+        hypervisor_running: Whether the Windows hypervisor runs, which proves the rest works.
+        firmware_enabled: Whether the processor reports virtualization as enabled in the firmware.
+            While the hypervisor runs, Windows reports False here, so it only counts without one.
+        restart_pending: Whether Windows waits for a restart to finish installing a component.
+    """
+
+    wsl_installed: bool
+    hypervisor_running: bool
+    firmware_enabled: bool
+    restart_pending: bool
+
+
+class VirtualizationStep(Enum):
+    """What has to happen before Docker Desktop can start on Windows."""
+
+    READY = "ready"
+    INSTALL_WSL = "install WSL"
+    RESTART = "restart"
+    FIRMWARE = "firmware"
+
+
+def next_virtualization_step(state: Virtualization) -> VirtualizationStep:
+    """Decides what Windows still needs before Docker Desktop can start.
+
+    Args:
+        state: What Windows reports.
+
+    Returns:
+        The step to take next.
+    """
+    if not state.wsl_installed:
+        return VirtualizationStep.INSTALL_WSL
+    if state.hypervisor_running:
+        return VirtualizationStep.READY
+    if state.restart_pending:
+        return VirtualizationStep.RESTART
+    if not state.firmware_enabled:
+        return VirtualizationStep.FIRMWARE
+    # WSL is installed and the firmware allows virtualization, so the Windows feature is off.
+    return VirtualizationStep.INSTALL_WSL
+
+
+def read_virtualization() -> Virtualization:
+    """Reads what Windows reports about virtualization, without needing administrator rights."""
+    try:
+        wsl = subprocess.run(
+            ["wsl.exe", "--status"],
+            capture_output=True,
+            env={**os.environ, "WSL_UTF8": "1"},
+            timeout=60,
+            check=False,
+        )
+        wsl_installed = wsl.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        wsl_installed = False
+
+    query = (
+        "$c = Get-CimInstance Win32_Processor; $s = Get-CimInstance Win32_ComputerSystem; "
+        '"$($c[0].VirtualizationFirmwareEnabled) $($s.HypervisorPresent)"'
+    )
+    try:
+        cim = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", query],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        firmware, _, hypervisor = cim.stdout.strip().partition(" ")
+    except (OSError, subprocess.TimeoutExpired):
+        firmware, hypervisor = "", ""
+    if not hypervisor:
+        # Without an answer, Docker Desktop itself is the judge, so nothing is blocked here.
+        firmware, hypervisor = "True", "True"
+
+    restart_pending = False
+    if sys.platform == "win32":
+        import winreg
+
+        key = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending"
+        try:
+            winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key).Close()
+            restart_pending = True
+        except OSError:
+            restart_pending = False
+
+    return Virtualization(
+        wsl_installed=wsl_installed,
+        hypervisor_running=hypervisor == "True",
+        firmware_enabled=firmware == "True",
+        restart_pending=restart_pending,
+    )
+
+
+RESTART_FIX = (
+    "Restart Windows, then run this script again. It continues where it stopped."
+)
+
+
+def prepare_windows_virtualization(report: Report) -> bool:
+    """Makes sure Windows can run the virtual machine that Docker Desktop needs.
+
+    Docker Desktop otherwise fails with "Virtualization support not detected".
+
+    Returns:
+        Whether Docker Desktop can start now.
+    """
+    without_it = "Docker Desktop cannot start, so nothing can run in Docker."
+    step = next_virtualization_step(read_virtualization())
+    if step is VirtualizationStep.READY:
+        report.ok("Windows can run the virtual machine that Docker Desktop needs.")
+        return True
+    if step is VirtualizationStep.RESTART:
+        report.problem(
+            "Windows needs a restart to finish installing a component.",
+            without_it,
+            RESTART_FIX,
+        )
+        return False
+    if step is VirtualizationStep.FIRMWARE:
+        report.problem(
+            "Virtualization is turned off in this computer's firmware, the BIOS or UEFI.",
+            without_it,
+            "In Windows, open Settings > System > Recovery and click Restart now "
+            "under Advanced startup. Then choose Troubleshoot > Advanced options > "
+            "UEFI Firmware Settings > Restart. In the firmware, turn on the setting called "
+            "Intel Virtualization Technology, VT-x, AMD-V, or SVM Mode. "
+            "Save, let Windows start, and run this script again.",
+        )
+        return False
+    print(
+        "  Docker Desktop needs WSL, the Windows Subsystem for Linux, to run containers."
+    )
+    print("  Turning it on also turns on the Windows feature for virtual machines.")
+    if not ask(
+        "Turn on WSL now? Windows asks for permission and needs a restart afterward."
+    ):
+        report.skip(f"WSL was not turned on. {without_it}")
+        return False
+    if not run(["wsl.exe", "--install", "--no-distribution"]):
+        report.problem(
+            "Turning on WSL failed.",
+            without_it,
+            "Read the error above. In PowerShell, run wsl --install --no-distribution, "
+            "then restart Windows and run this script again.",
+        )
+        return False
+    report.problem(
+        "Windows needs a restart to finish turning on WSL.", without_it, RESTART_FIX
+    )
+    return False
+
+
 def docker_info() -> subprocess.CompletedProcess[str] | None:
     """Asks the Docker engine for its status.
 
@@ -949,7 +1112,8 @@ def ensure_docker_running(report: Report, *, ask_first: bool = True) -> bool:
         f"Docker did not become ready within {DOCKER_WAIT_SECONDS // 60} minutes.",
         "Nothing can run in Docker until it is ready.",
         "Check the Docker Desktop window for a message, such as a restart that Windows needs. "
-        + fix,
+        "If it says that virtualization support was not detected, run the setup script, "
+        "which finds out why. " + fix,
     )
     return False
 
@@ -1014,6 +1178,9 @@ def main() -> int:
     has_docker = ensure_tool(
         DOCKER, report, without_it="Only running outside Docker is possible."
     )
+    docker_can_start = has_docker
+    if has_docker and sys.platform == "win32":
+        docker_can_start = prepare_windows_virtualization(report)
     dockerfile = REPO / "Dockerfile"
     if dockerfile.exists():
         text = dockerfile.read_text(encoding="utf-8")
@@ -1048,7 +1215,8 @@ def main() -> int:
         section("Docker stack")
         has_siblings = ensure_siblings(compose, report)
         # Docker is checked last, so Docker Desktop is not started for a stack that cannot run.
-        if has_docker and has_siblings and has_token and ensure_docker_running(report):
+        ready = docker_can_start and has_siblings and has_token
+        if ready and ensure_docker_running(report):
             start_stack(report)
 
     print_summary(report)
