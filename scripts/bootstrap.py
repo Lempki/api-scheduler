@@ -640,8 +640,66 @@ def _fill_stack_secret(
     return set_env_value(text, variable, existing or "")
 
 
-def clone_siblings(compose: str, report: Report) -> bool:
-    """Clones the repositories that compose.stack.yml builds, when they are missing.
+def downloaded_copies(parent: Path, name: str) -> list[Path]:
+    """Lists the folders that a downloaded release of a repository may have extracted to.
+
+    GitHub names the folder in a release ZIP after the repository and the version.
+    So a download of api-media extracts to a folder such as api-media-2.1.0.
+    compose.stack.yml expects the plain repository name instead.
+
+    Args:
+        parent: The folder that holds this repository and its neighbors.
+        name: The repository name that compose.stack.yml expects.
+
+    Returns:
+        The matching folders, sorted by name.
+    """
+    return sorted(p for p in parent.glob(f"{name}-*") if p.is_dir())
+
+
+def rename_downloaded_copies(missing: list[str], report: Report) -> list[str]:
+    """Offers to rename downloaded release folders to the names compose.stack.yml expects.
+
+    Args:
+        missing: The repository names that were not found.
+        report: The report that records the outcome.
+
+    Returns:
+        The names that are still missing afterward.
+    """
+    still_missing = []
+    for name in missing:
+        copies = downloaded_copies(REPO.parent, name)
+        if len(copies) != 1:
+            still_missing.append(name)
+            continue
+        copy = copies[0]
+        question = (
+            f"{copy.name} looks like a downloaded copy of {name}. Rename it to {name}?"
+        )
+        if not ask(question):
+            still_missing.append(name)
+            continue
+        try:
+            copy.rename(REPO.parent / name)
+        except OSError as error:
+            report.problem(
+                f"Renaming {copy.name} to {name} failed: {error}",
+                "The Docker stack builds it from a folder with the plain name.",
+                "Close any window or program that has the folder open, "
+                "or rename it by hand, and run the setup script again.",
+            )
+            still_missing.append(name)
+            continue
+        report.ok(f"Renamed {copy.name} to {name}.")
+    return still_missing
+
+
+def ensure_siblings(compose: str, report: Report) -> bool:
+    """Makes sure the repositories that compose.stack.yml builds are next to this one.
+
+    A downloaded release folder is renamed after asking.
+    A repository that is still missing is cloned when this repository is a Git clone.
 
     Returns:
         Whether every repository is present afterward.
@@ -652,14 +710,27 @@ def clone_siblings(compose: str, report: Report) -> bool:
             "The repositories that compose.stack.yml builds are next to this one."
         )
         return True
+    missing = rename_downloaded_copies(missing, report)
+    if not missing:
+        return True
     names = ", ".join(missing)
     without_it = "The Docker stack cannot be built without them."
-    manual_fix = f"Clone {names} into {REPO.parent} and run the setup script again."
     were = "were" if len(missing) > 1 else "was"
     print(
         f"  compose.stack.yml builds {names} from the folder next to this one, "
         f"but it {were} not found."
     )
+    # A downloaded release has no Git history, so the address of the others is unknown.
+    if not (REPO / ".git").exists():
+        report.problem(
+            f"{names} {were} not found next to this folder.",
+            without_it,
+            f"Download the latest release of {names} from GitHub as well. "
+            f"Extract it into {REPO.parent} and run the setup script again, "
+            "which then offers to rename the extracted folder.",
+        )
+        return False
+    manual_fix = f"Clone {names} into {REPO.parent} and run the setup script again."
     if not ensure_tool(GIT, report, without_it=without_it):
         return False
     origin = subprocess.run(
@@ -887,7 +958,7 @@ def main() -> int:
 
     if has_stack:
         section("Docker stack")
-        has_siblings = clone_siblings(compose, report)
+        has_siblings = ensure_siblings(compose, report)
         # Docker is checked last, so Docker Desktop is not started for a stack that cannot run.
         if has_docker and has_siblings and has_token and ensure_docker_running(report):
             start_stack(report)

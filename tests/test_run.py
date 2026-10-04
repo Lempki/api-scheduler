@@ -161,3 +161,20 @@ def test_check_setup_passes_when_everything_is_in_place(tmp_path: Path) -> None:
 
     assert run_script.check_setup(run_script.detect_project(bot), report)
     assert report.problems == []
+
+
+def test_update_refuses_a_downloaded_copy_before_pulling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bot = make_bot(tmp_path, "DISCORD_TOKEN=a.b.c\nAPI_MEDIA_SECRET=generated\n")
+    (bot / ".git").mkdir()
+    (tmp_path / "api-media").mkdir()
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        run_script, "run", lambda command: commands.append(command) or True
+    )
+    report = run_script.Report()
+
+    assert not run_script.update(run_script.detect_project(bot), report)
+    assert "api-media is a downloaded copy" in report.problems[0].what
+    assert commands == []

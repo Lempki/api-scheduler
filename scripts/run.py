@@ -429,9 +429,17 @@ def update(project: Project, report: Report) -> bool:
         folders += [
             project.root.parent / name for name in stack_siblings(project.compose_text)
         ]
+    downloaded = [folder.name for folder in folders if not (folder / ".git").exists()]
+    if downloaded:
+        names = ", ".join(downloaded)
+        report.problem(
+            f"{names} is a downloaded copy, not a Git clone, so update cannot pull its code.",
+            "Restarting now would rebuild the same code.",
+            f"Download the latest release of {names} and copy its files over the folder, "
+            "keeping .env. Then run start. A Git clone updates with this action alone.",
+        )
+        return False
     for folder in folders:
-        if not (folder / ".git").exists():
-            continue
         print(f"  {folder.name}:")
         if not run(["git", "-C", str(folder), "pull", "--ff-only"]):
             report.problem(

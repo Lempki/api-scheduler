@@ -214,6 +214,7 @@ The script also takes an action, such as `run.bat stop` on Windows or `./run.sh 
 | `local` | Runs the project in the terminal without Docker. Press Ctrl+C to stop it. |
 
 When a service crashes right after it starts, the script shows the end of its log and stops it, so it does not restart over and over.
+The `update` action needs a Git clone. In a downloaded release, it explains how to replace the files by hand instead.
 
 ### Docker
 

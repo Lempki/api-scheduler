@@ -209,3 +209,37 @@ def test_ask_without_input_answers_no(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("builtins.input", no_input)
 
     assert bootstrap.ask("Install it?") is False
+
+
+STACK_BUILDS_MEDIA = "  media:\n    build: ../api-media\n"
+
+
+def test_downloaded_copy_is_renamed_after_asking(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (repo.parent / "api-media-2.1.0").mkdir()
+    monkeypatch.setattr(bootstrap, "ask", lambda _question: True)
+    report = bootstrap.Report()
+
+    assert bootstrap.ensure_siblings(STACK_BUILDS_MEDIA, report)
+    assert (repo.parent / "api-media").is_dir()
+    assert not (repo.parent / "api-media-2.1.0").exists()
+
+
+def test_two_downloaded_copies_are_never_guessed_between(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (repo.parent / "api-media-2.0.0").mkdir()
+    (repo.parent / "api-media-2.1.0").mkdir()
+    monkeypatch.setattr(bootstrap, "ask", lambda _question: True)
+    report = bootstrap.Report()
+
+    assert not bootstrap.ensure_siblings(STACK_BUILDS_MEDIA, report)
+    assert not (repo.parent / "api-media").exists()
+
+
+def test_downloaded_bot_explains_how_to_get_a_missing_service(repo: Path) -> None:
+    report = bootstrap.Report()
+
+    assert not bootstrap.ensure_siblings(STACK_BUILDS_MEDIA, report)
+    assert "Download the latest release of api-media" in report.problems[0].fix
