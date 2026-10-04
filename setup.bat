@@ -1,41 +1,48 @@
 @echo off
 setlocal
-:: Prepares a local development environment with uv.
-:: Run it from the repository root. It is safe to run again at any time.
+:: Installs uv when it is missing and then runs scripts\bootstrap.py, which does everything else.
+:: Double-click it or run it from any folder. It is safe to run again at any time.
+cd /d "%~dp0"
 for %%I in (.) do echo === %%~nxI setup ===
-echo.
 
 where uv >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: uv was not found. Install it with: winget install --id astral-sh.uv
-    pause
-    exit /b 1
-)
-
-:: uv creates .venv on first run and installs the package with its locked dependencies.
-echo Installing dependencies...
-uv sync
-if errorlevel 1 (
-    echo ERROR: Failed to install dependencies.
-    pause
-    exit /b 1
-)
-
-if not exist ".env" (
-    copy ".env.template" ".env" >nul
-    echo Created .env from .env.template.
-    echo   ^> Edit .env and set API_SECRET before running the API.
-) else (
-    echo .env already exists, skipping.
-)
-
-:: The package is the directory under src\ that holds main.py.
-for /d %%D in (src\*) do if exist "%%D\main.py" set "PACKAGE=%%~nxD"
+if not errorlevel 1 goto bootstrap
 
 echo.
-echo Setup complete!
-echo   Run the API : uv run uvicorn %PACKAGE%.main:app --reload
-echo   Run tests   : uv run pytest
+echo uv was not found. uv installs Python and this project's dependencies, so setup needs it.
+where winget >nul 2>&1
+if errorlevel 1 (
+    echo [!!] winget, which installs uv, was not found either. It comes with App Installer from the Microsoft Store.
+    echo      What to do: Install uv from https://docs.astral.sh/uv/getting-started/installation/ and run this script again.
+    goto failed
+)
+set "ANSWER="
+set /p "ANSWER=  Install uv with winget now? [Y/n] "
+if /i "%ANSWER%"=="n" goto declined
+if /i "%ANSWER%"=="no" goto declined
+winget install --exact --id astral-sh.uv
+:: winget changes the stored PATH, which this window only sees after reading it again.
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('Path','User') + ';' + [Environment]::GetEnvironmentVariable('Path','Machine')"`) do set "PATH=%%P;%PATH%"
+where uv >nul 2>&1
+if errorlevel 1 (
+    echo [!!] uv could not be installed, or this window cannot find it yet.
+    echo      What to do: If winget reported an error above, install uv from https://docs.astral.sh/uv/getting-started/installation/ instead. Otherwise close this window and run this script again.
+    goto failed
+)
+
+:bootstrap
+uv run --no-project python scripts\bootstrap.py
+if errorlevel 1 goto failed
 echo.
 pause
-endlocal
+exit /b 0
+
+:declined
+echo [--] uv was not installed, so setup stopped.
+echo      What to do: Install uv from https://docs.astral.sh/uv/getting-started/installation/ and run this script again.
+
+:failed
+echo.
+echo Setup did not finish. The messages above say what to do.
+pause
+exit /b 1

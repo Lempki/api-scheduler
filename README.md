@@ -159,9 +159,9 @@ Running without Docker requires Python 3.12 and [uv](https://docs.astral.sh/uv/)
 
 ## Setup
 
-You can use the included setup script to prepare the project in a single step.
+The setup script prepares the project in a single run, and it is safe to run again at any time.
 
-On Windows, run the following command:
+On Windows, double-click `setup.bat` or run it from a terminal:
 
 ```
 setup.bat
@@ -174,7 +174,16 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
-The script runs `uv sync`, which creates the `.venv` virtual environment if needed and installs the package with its locked dependencies. It copies `.env.template` to `.env` on the first run. You must edit `.env` and set `API_SECRET` before starting the API.
+The script asks before it installs anything, and it does the following:
+
+1. It installs [uv](https://docs.astral.sh/uv/) when uv is missing. uv also provides Python 3.12 when the machine lacks it.
+2. It offers to install Docker, and the tools that the Docker image includes for running outside Docker. It uses winget on Windows, Homebrew on macOS, and the system package manager on Linux.
+3. It runs `uv sync`, which installs the package and its locked dependencies into `.venv`.
+4. It copies `.env.template` to `.env` on the first run and fills `API_SECRET` with a random value.
+
+A step that fails says what went wrong, why it matters, and what to do next, and the summary at the end lists it again.
+The steps live in `scripts/bootstrap.py`, which needs only the Python standard library.
+
 Outside Docker, also set `SCHEDULER_DB_PATH` to a file in a directory that exists, such as `scheduler.db`, because the default `/data` directory exists only in the container.
 
 If you prefer to perform the setup manually, follow these steps:
@@ -239,6 +248,7 @@ api-scheduler/
 ├── ruff.toml           # Lint and format settings on top of the shared baseline.
 ├── setup.bat           # Windows setup script.
 ├── setup.sh            # macOS and Linux setup script.
+├── scripts/bootstrap.py  # The steps that both setup scripts run.
 └── .env.template       # Template for environment variables.
 ```
 
