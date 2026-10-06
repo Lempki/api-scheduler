@@ -1010,6 +1010,193 @@ def prepare_windows_virtualization(report: Report) -> bool:
     return False
 
 
+WSL_CONFIG = Path.home() / ".wslconfig"
+
+# A memory setting in .wslconfig, such as "memory=4GB".
+_WSL_MEMORY = re.compile(r"^\s*memory\s*=\s*(\S+)", re.IGNORECASE)
+
+# A section header in .wslconfig, such as "[wsl2]".
+_INI_SECTION = re.compile(r"^\s*\[(?P<name>[^\]]+)\]\s*$")
+
+# Docker Desktop needs this much memory to build and run the images.
+MIN_WSL_MEMORY_GB = 2
+
+# The services of one project need well under 1 GB, so more only holds file caches.
+MAX_SUGGESTED_WSL_MEMORY_GB = 4
+
+
+def total_memory_gb() -> float | None:
+    """Returns the computer's total RAM in gigabytes, or None when Windows does not say."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+
+    class MemoryStatus(ctypes.Structure):
+        # The layout of MEMORYSTATUSEX, which GlobalMemoryStatusEx fills in.
+        _fields_ = [
+            ("length", ctypes.c_ulong),
+            ("memory_load", ctypes.c_ulong),
+            ("total_physical", ctypes.c_ulonglong),
+            ("available_physical", ctypes.c_ulonglong),
+            ("total_page_file", ctypes.c_ulonglong),
+            ("available_page_file", ctypes.c_ulonglong),
+            ("total_virtual", ctypes.c_ulonglong),
+            ("available_virtual", ctypes.c_ulonglong),
+            ("available_extended_virtual", ctypes.c_ulonglong),
+        ]
+
+    status = MemoryStatus()
+    status.length = ctypes.sizeof(MemoryStatus)
+    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+        return None
+    total: int = status.total_physical
+    return total / 1024**3
+
+
+def suggested_wsl_memory_gb(total_gb: float | None) -> int:
+    """Suggests a memory cap for WSL: half of the RAM, between the minimum and the maximum."""
+    if total_gb is None:
+        return MAX_SUGGESTED_WSL_MEMORY_GB
+    half = int(total_gb // 2)
+    return max(MIN_WSL_MEMORY_GB, min(MAX_SUGGESTED_WSL_MEMORY_GB, half))
+
+
+def wsl_memory_setting(text: str) -> str | None:
+    """Returns the memory cap in the [wsl2] section of .wslconfig text, or None without one."""
+    section = ""
+    for line in text.splitlines():
+        header = _INI_SECTION.match(line)
+        if header:
+            section = header["name"].strip().lower()
+            continue
+        match = _WSL_MEMORY.match(line)
+        if section == "wsl2" and match:
+            return match.group(1)
+    return None
+
+
+def with_wsl_memory(text: str, size_gb: int) -> str:
+    """Adds a memory cap to .wslconfig text, keeping every other line.
+
+    Args:
+        text: The current contents, which hold no memory cap yet.
+        size_gb: The cap in whole gigabytes.
+
+    Returns:
+        The new contents, ending with a newline.
+    """
+    setting = f"memory={size_gb}GB"
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        header = _INI_SECTION.match(line)
+        if header and header["name"].strip().lower() == "wsl2":
+            lines.insert(index + 1, setting)
+            return "\n".join(lines) + "\n"
+    before = "\n".join(lines).rstrip("\n")
+    return (f"{before}\n\n" if before else "") + f"[wsl2]\n{setting}\n"
+
+
+def read_size_answer(answer: str, suggested: int, total_gb: float | None) -> int | None:
+    """Reads the answer to the memory cap question.
+
+    Args:
+        answer: What the user typed.
+        suggested: The cap that pressing Enter accepts.
+        total_gb: The computer's total RAM, or None when it is unknown.
+
+    Returns:
+        The cap in whole gigabytes, or None when the user declined.
+
+    Raises:
+        ValueError: The answer is not a usable size. The message says why.
+    """
+    text = answer.strip().lower().removesuffix("gb").strip()
+    if not text:
+        return suggested
+    if text in ("n", "no"):
+        return None
+    if not text.isdigit():
+        raise ValueError("Type a whole number of gigabytes, such as 6, or n to skip.")
+    size = int(text)
+    if size < MIN_WSL_MEMORY_GB:
+        raise ValueError(f"Docker Desktop needs at least {MIN_WSL_MEMORY_GB} GB.")
+    if total_gb is not None and size >= total_gb:
+        raise ValueError(
+            f"That is not below the {total_gb:.1f} GB that this computer has."
+        )
+    return size
+
+
+def cap_wsl_memory(report: Report) -> None:
+    """Offers to cap the memory of the WSL virtual machine that Docker Desktop runs in.
+
+    WSL lets the virtual machine take up to half of the RAM and keeps file caches in it.
+    Windows therefore shows far more memory in use than the containers need.
+    A cap that .wslconfig already holds is the user's choice and stays unchanged.
+    """
+    try:
+        text = WSL_CONFIG.read_text(encoding="utf-8") if WSL_CONFIG.exists() else ""
+    except (OSError, UnicodeDecodeError) as error:
+        report.skip(
+            f"WSL memory was not capped, because {WSL_CONFIG} could not be read: {error}"
+        )
+        return
+    current = wsl_memory_setting(text)
+    if current is not None:
+        report.ok(f"WSL memory is already capped at {current} in {WSL_CONFIG}.")
+        return
+
+    total = total_memory_gb()
+    suggested = suggested_wsl_memory_gb(total)
+    if total is not None:
+        print(f"  This computer has {total:.1f} GB of RAM.")
+        print(
+            "  Docker Desktop's WSL virtual machine may take up to half of it, "
+            f"about {total / 2:.1f} GB."
+        )
+    print(
+        "  It keeps file caches there, so Windows shows more memory in use than needed."
+    )
+    print(
+        f"  This project needs well under 1 GB, so {suggested} GB leaves plenty of room."
+    )
+    print(f"  The cap goes into {WSL_CONFIG} and applies to every WSL virtual machine.")
+    size: int | None = None
+    for _ in range(3):
+        try:
+            answer = input(
+                f"  Cap it at {suggested} GB? Press Enter for {suggested} GB, "
+                "type another number of GB, or n to skip: "
+            )
+        except EOFError:
+            # Without an interactive input, the machine-wide setting stays unchanged.
+            print()
+            answer = "n"
+        try:
+            size = read_size_answer(answer, suggested, total)
+        except ValueError as error:
+            print(f"  {error}")
+            continue
+        break
+    else:
+        report.skip("WSL memory was not capped, because no usable size was given.")
+        return
+    if size is None:
+        report.skip("WSL memory was not capped. Windows may show WSL using several GB.")
+        return
+    try:
+        WSL_CONFIG.write_text(with_wsl_memory(text, size), encoding="utf-8")
+    except OSError as error:
+        report.problem(
+            f"Writing {WSL_CONFIG} failed: {error}",
+            "The WSL virtual machine stays without a memory cap.",
+            f"Add the line memory={size}GB under [wsl2] in that file by hand.",
+        )
+        return
+    report.ok(f"Capped WSL memory at {size} GB in {WSL_CONFIG}.")
+    print("  The cap takes effect the next time Windows starts.")
+
+
 def docker_info() -> subprocess.CompletedProcess[str] | None:
     """Asks the Docker engine for its status.
 
@@ -1181,6 +1368,7 @@ def main() -> int:
     docker_can_start = has_docker
     if has_docker and sys.platform == "win32":
         docker_can_start = prepare_windows_virtualization(report)
+        cap_wsl_memory(report)
     dockerfile = REPO / "Dockerfile"
     if dockerfile.exists():
         text = dockerfile.read_text(encoding="utf-8")

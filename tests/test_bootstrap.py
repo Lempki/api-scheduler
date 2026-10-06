@@ -403,3 +403,111 @@ def test_ready_windows_lets_docker_start(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(bootstrap, "read_virtualization", lambda: windows())
 
     assert bootstrap.prepare_windows_virtualization(bootstrap.Report())
+
+
+@pytest.mark.parametrize(
+    ("total_gb", "suggested"),
+    [(31.7, 4), (15.8, 4), (8.0, 4), (6.0, 3), (3.9, 2), (None, 4)],
+)
+def test_suggested_wsl_memory(total_gb: float | None, suggested: int) -> None:
+    assert bootstrap.suggested_wsl_memory_gb(total_gb) == suggested
+
+
+@pytest.mark.parametrize(
+    ("text", "setting"),
+    [
+        ("[wsl2]\nmemory=6GB\n", "6GB"),
+        ("[wsl2]\nprocessors=2\nMemory = 8GB\n", "8GB"),
+        ("[wsl2]\n# memory=6GB\n", None),
+        ("[experimental]\nmemory=6GB\n", None),
+        ("", None),
+    ],
+)
+def test_wsl_memory_setting(text: str, setting: str | None) -> None:
+    assert bootstrap.wsl_memory_setting(text) == setting
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("", "[wsl2]\nmemory=4GB\n"),
+        ("[wsl2]\nprocessors=2\n", "[wsl2]\nmemory=4GB\nprocessors=2\n"),
+        (
+            "[experimental]\nsparseVhd=true\n",
+            "[experimental]\nsparseVhd=true\n\n[wsl2]\nmemory=4GB\n",
+        ),
+    ],
+)
+def test_with_wsl_memory_keeps_every_other_line(text: str, expected: str) -> None:
+    assert bootstrap.with_wsl_memory(text, 4) == expected
+
+
+@pytest.mark.parametrize(
+    ("answer", "size"), [("", 4), ("6", 6), (" 6GB ", 6), ("n", None), ("NO", None)]
+)
+def test_read_size_answer(answer: str, size: int | None) -> None:
+    assert bootstrap.read_size_answer(answer, 4, 15.8) == size
+
+
+@pytest.mark.parametrize("answer", ["six", "4.5", "1", "16", "-3"])
+def test_read_size_answer_rejects_unusable_sizes(answer: str) -> None:
+    with pytest.raises(ValueError):
+        bootstrap.read_size_answer(answer, 4, 15.8)
+
+
+@pytest.fixture
+def wslconfig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Points the script at a .wslconfig in tmp_path on a computer with 15.8 GB of RAM."""
+    path = tmp_path / ".wslconfig"
+    monkeypatch.setattr(bootstrap, "WSL_CONFIG", path)
+    monkeypatch.setattr(bootstrap, "total_memory_gb", lambda: 15.8)
+    return path
+
+
+def answers(monkeypatch: pytest.MonkeyPatch, *replies: str) -> None:
+    queue = list(replies)
+    monkeypatch.setattr("builtins.input", lambda _prompt: queue.pop(0))
+
+
+def test_enter_writes_the_suggested_cap(
+    wslconfig: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    answers(monkeypatch, "")
+
+    bootstrap.cap_wsl_memory(bootstrap.Report())
+
+    assert wslconfig.read_text(encoding="utf-8") == "[wsl2]\nmemory=4GB\n"
+    assert "15.8 GB of RAM" in capsys.readouterr().out
+
+
+def test_own_size_is_written_after_a_wrong_answer(
+    wslconfig: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    answers(monkeypatch, "lots", "6")
+
+    bootstrap.cap_wsl_memory(bootstrap.Report())
+
+    assert wslconfig.read_text(encoding="utf-8") == "[wsl2]\nmemory=6GB\n"
+
+
+def test_existing_cap_is_never_changed(
+    wslconfig: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wslconfig.write_text("[wsl2]\nmemory=12GB\n", encoding="utf-8")
+    answers(monkeypatch)
+
+    bootstrap.cap_wsl_memory(bootstrap.Report())
+
+    assert wslconfig.read_text(encoding="utf-8") == "[wsl2]\nmemory=12GB\n"
+
+
+def test_declining_writes_nothing(
+    wslconfig: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    answers(monkeypatch, "n")
+    report = bootstrap.Report()
+
+    bootstrap.cap_wsl_memory(report)
+
+    assert not wslconfig.exists()
+    assert report.skipped
