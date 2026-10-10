@@ -1,6 +1,7 @@
 """Tests for scripts/bootstrap.py, which setup.bat and setup.sh run."""
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -293,7 +294,9 @@ def test_unrelated_folders_are_never_moved(repo: Path) -> None:
     (repo.parent / "api-media-notes").mkdir()
     (repo.parent / "api-media-2.1.0").mkdir()
 
-    assert not bootstrap.ensure_siblings(STACK_BUILDS_MEDIA, bootstrap.Report())
+    bootstrap.ensure_siblings(STACK_BUILDS_MEDIA, bootstrap.Report())
+
+    assert not (repo.parent / "api-media").exists()
     assert (repo.parent / "api-media-notes").is_dir()
     assert (repo.parent / "api-media-2.1.0").is_dir()
 
@@ -313,11 +316,106 @@ def test_release_version(folder_name: str, version: tuple[int, ...] | None) -> N
     assert bootstrap.release_version(folder_name, "api-media") == version
 
 
-def test_downloaded_bot_explains_how_to_get_a_missing_service(repo: Path) -> None:
+def test_downloaded_bot_runs_without_the_service_folder(repo: Path) -> None:
     report = bootstrap.Report()
 
-    assert not bootstrap.ensure_siblings(STACK_BUILDS_MEDIA, report)
-    assert "Download the latest release of api-media" in report.problems[0].fix
+    assert bootstrap.ensure_siblings(STACK_BUILDS_MEDIA, report)
+    assert report.problems == []
+
+
+@pytest.mark.parametrize(
+    ("compose", "name"),
+    [
+        ("# A comment.\nname: api-media\n\nservices:\n", "api-media"),
+        ("services:\n  bot:\n    build: .\n", "discord-bot-x"),
+    ],
+)
+def test_project_name(compose: str, name: str) -> None:
+    assert bootstrap.project_name(Path("discord-bot-x"), compose) == name
+
+
+def test_only_a_git_clone_builds_its_images(tmp_path: Path) -> None:
+    assert bootstrap.uses_published_images(tmp_path)
+    (tmp_path / ".git").mkdir()
+    assert not bootstrap.uses_published_images(tmp_path)
+
+
+def test_cron_line_runs_the_update_in_the_project_folder() -> None:
+    line = bootstrap.cron_line(Path("/srv/my bots/discord-bot-x"), "discord-bot-x")
+
+    assert line.startswith(f"0 {bootstrap.UPDATE_HOUR} * * * cd '")
+    assert "my bots" in line
+    assert "&& ./run.sh update < /dev/null >> update.log 2>&1" in line
+
+
+def test_without_cron_line_keeps_every_other_line() -> None:
+    mine = bootstrap.cron_line(Path("/srv/discord-bot-x"), "discord-bot-x")
+    other = bootstrap.cron_line(Path("/srv/api-media"), "api-media")
+    crontab = f"MAILTO=me\n{mine}\n{other}\n"
+
+    assert bootstrap.without_cron_line(crontab, "discord-bot-x") == (
+        f"MAILTO=me\n{other}\n"
+    )
+
+
+class FakeResult:
+    """Stands in for the result of subprocess.run."""
+
+    def __init__(self, returncode: int, stderr: str = "") -> None:
+        self.returncode = returncode
+        self.stderr = stderr
+        self.stdout = ""
+
+
+def test_pull_signs_in_when_the_registry_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    results = iter([FakeResult(1, "error from registry: denied"), FakeResult(0)])
+    monkeypatch.setattr(
+        bootstrap.subprocess, "run", lambda *_args, **_kwargs: next(results)
+    )
+    sign_ins: list[bool] = []
+    monkeypatch.setattr(
+        bootstrap, "sign_in_to_registry", lambda _report: sign_ins.append(True) or True
+    )
+    report = bootstrap.Report()
+
+    assert bootstrap.pull_images(["docker", "compose"], report)
+    assert sign_ins == [True]
+    assert report.problems == []
+
+
+def test_pull_explains_a_refusal_without_a_sign_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refused = FakeResult(1, "unauthorized: authentication required")
+    monkeypatch.setattr(bootstrap.subprocess, "run", lambda *_args, **_kwargs: refused)
+    monkeypatch.setattr(bootstrap, "sign_in_to_registry", lambda _report: False)
+    report = bootstrap.Report()
+
+    assert not bootstrap.pull_images(["docker", "compose"], report)
+    assert "refused" in report.problems[0].what
+    assert "private" in report.problems[0].fix
+
+
+def test_pull_failure_without_a_refusal_asks_for_no_sign_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    offline = FakeResult(1, "dial tcp: lookup ghcr.io: no such host")
+    monkeypatch.setattr(bootstrap.subprocess, "run", lambda *_args, **_kwargs: offline)
+    monkeypatch.setattr(bootstrap, "sign_in_to_registry", pytest.fail)
+    report = bootstrap.Report()
+
+    assert not bootstrap.pull_images(["docker", "compose"], report)
+    assert report.problems[0].what == "Downloading the images failed."
+
+
+def test_sign_in_needs_someone_at_the_keyboard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bootstrap.sys.stdin, "isatty", lambda: False)
+
+    assert not bootstrap.sign_in_to_registry(bootstrap.Report())
 
 
 def windows(
@@ -511,3 +609,28 @@ def test_declining_writes_nothing(
 
     assert not wslconfig.exists()
     assert report.skipped
+
+
+def test_parse_config_images_marks_the_projects_own_image(tmp_path: Path) -> None:
+    bot = tmp_path / "discord-bot-x"
+    config = {
+        "name": "discord-bot-x",
+        "services": {
+            "bot": {
+                "image": "ghcr.io/lempki/discord-bot-x:latest",
+                "build": {"context": str(bot), "dockerfile": "Dockerfile"},
+            },
+            "media": {
+                "image": "ghcr.io/lempki/api-media:latest",
+                "build": {"context": str(tmp_path / "api-media")},
+            },
+            "built-only": {"build": {"context": str(bot)}},
+        },
+    }
+
+    images = bootstrap.parse_config_images(json.dumps(config), bot)
+
+    assert [(i.service, i.ref, i.own) for i in images] == [
+        ("bot", "ghcr.io/lempki/discord-bot-x:latest", True),
+        ("media", "ghcr.io/lempki/api-media:latest", False),
+    ]

@@ -1,0 +1,15 @@
+# Publishes the Docker image of every version tag, such as v1.2.0, to the GitHub Container Registry.
+# A downloaded release runs that image, and its run script's update action installs the newest one.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  image:
+    uses: Lempki/dev-standards/.github/workflows/docker-publish.yml@v0.3.0
+    permissions:
+      contents: read
+      packages: write

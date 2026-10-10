@@ -177,8 +177,8 @@ chmod +x setup.sh
 The script asks before it installs anything, and it does the following:
 
 1. It installs [uv](https://docs.astral.sh/uv/) when uv is missing. uv also provides Python 3.12 when the machine lacks it.
-2. It offers to install Docker, and the tools that the Docker image includes for running outside Docker. It uses winget on Windows, Homebrew on macOS, and the system package manager on Linux. On Windows it also turns on WSL, which Docker Desktop needs, and says when Windows needs a restart or virtualization is turned off in the firmware. It shows the computer's RAM and offers to cap the memory of Docker Desktop's virtual machine, at a suggested or your own size.
-3. It runs `uv sync`, which installs the package and its locked dependencies into `.venv`.
+2. It offers to install Docker, and in a Git clone also the tools that the Docker image includes for running outside Docker. It uses winget on Windows, Homebrew on macOS, and the system package manager on Linux. On Windows it also turns on WSL, which Docker Desktop needs, and says when Windows needs a restart or virtualization is turned off in the firmware. It shows the computer's RAM and offers to cap the memory of Docker Desktop's virtual machine, at a suggested or your own size.
+3. In a Git clone, it runs `uv sync`, which installs the package and its locked dependencies into `.venv`.
 4. It copies `.env.template` to `.env` on the first run and fills `API_SECRET` with a random value.
 
 A step that fails says what went wrong, why it matters, and what to do next, and the summary at the end lists it again.
@@ -199,22 +199,29 @@ uv run uvicorn scheduler_api.main:app --port 8004
 
 After setup has run once, the run script starts the API.
 Double-click `run.bat` on Windows, or run `./run.sh` on macOS and Linux.
-It builds and starts the API in Docker in the background, waits until its health check passes, and shows its status.
+It starts the API in Docker in the background, waits until its health check passes, and shows its status.
+A downloaded release runs the image that GitHub publishes for every release, and a Git clone builds the image from its own files.
 The container then starts again whenever Docker starts.
 
 The script also takes an action, such as `run.bat stop` on Windows or `./run.sh stop` elsewhere:
 
 | Action | What it does |
 |---|---|
-| `start` | Builds and starts everything in Docker and waits until it is ready. It is the default. |
+| `start` | Starts everything in Docker and waits until it is ready. It is the default. |
 | `stop` | Stops the containers. They stay stopped until the next start. |
-| `status` | Shows whether each container runs and is healthy. |
+| `status` | Shows whether each container runs and is healthy, its version, and whether updates are automatic. |
 | `logs` | Follows the logs. Press Ctrl+C to stop following. |
-| `update` | Pulls the latest code, rebuilds on fresh base images, and restarts. |
+| `update` | Installs the newest release. In a Git clone, it pulls the latest code, rebuilds on fresh base images, and restarts. |
+| `schedule` | Installs new releases automatically every night at 04:00. |
+| `unschedule` | Stops installing new releases automatically. |
 | `local` | Runs the project in the terminal without Docker. Press Ctrl+C to stop it. |
 
 When a service crashes right after it starts, the script shows the end of its log and stops it, so it does not restart over and over.
-The `update` action needs a Git clone. In a downloaded release, it explains how to replace the files by hand instead.
+
+In a downloaded release, the `update` action downloads the newest image and takes the run, setup, and compose files from it.
+`.env` and the other settings stay as they are.
+When the new release fails to start, it puts the previous image and files back, and later updates skip that release.
+The `schedule` action runs this update every night at 04:00, and each run writes what it did into `update.log`.
 
 ### Docker
 

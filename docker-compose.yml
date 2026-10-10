@@ -4,6 +4,7 @@ name: api-scheduler
 
 services:
   scheduler:
+    image: ghcr.io/lempki/api-scheduler:latest
     build: .
     ports:
       - "8004:8000"

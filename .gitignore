@@ -16,3 +16,7 @@ dist/
 *.db-wal
 .claude/settings.local.json
 # <<< dev-standards managed block.
+
+# What run update leaves in a downloaded release: the previous version and the update log.
+.update/
+update.log

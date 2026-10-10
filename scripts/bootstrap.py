@@ -15,9 +15,11 @@ import contextlib
 import ctypes.util
 import getpass
 import io
+import json
 import os
 import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -54,7 +56,25 @@ _VERSION_SUFFIX = re.compile(r"-v?(\d+(?:\.\d+)*)")
 # A Discord bot token has three dot-separated parts.
 _DISCORD_TOKEN = re.compile(r"[\w-]+\.[\w-]+\.[\w-]+")
 
+# The project name at the top of a compose file, such as "name: api-media".
+_PROJECT_NAME = re.compile(r"^name:\s*([\w.-]+)\s*$", re.MULTILINE)
+
+# What the registry answers for an image that is private or not published yet.
+_PULL_DENIED = re.compile(r"denied|unauthorized|authentication required", re.IGNORECASE)
+
 DOCKER_WAIT_SECONDS = 180
+
+# The registry that holds the image of every release.
+REGISTRY = "ghcr.io"
+
+# The page that creates a GitHub token that may only read packages, with the scope already ticked.
+TOKEN_PAGE = "https://github.com/settings/tokens/new?scopes=read:packages&description=Docker+updates"
+
+# When scheduled updates run, in the computer's local time.
+UPDATE_HOUR = 4
+
+# Marks the crontab line of a scheduled update, followed by the project name.
+_CRON_MARKER = "# scheduled update of "
 
 
 @dataclass(frozen=True)
@@ -546,6 +566,21 @@ def sibling_url(origin: str, name: str) -> str:
     return f"{owner}/{name}.git"
 
 
+def uses_published_images(root: Path) -> bool:
+    """Returns whether a folder runs the images that releases publish, instead of building them.
+
+    A downloaded release has no Git history, and its code is the code of a published image.
+    A Git clone may hold changes of its own, so it builds the images from its files.
+    """
+    return not (root / ".git").exists()
+
+
+def project_name(root: Path, compose: str) -> str:
+    """Returns the project name that a compose file sets, or the folder name without one."""
+    match = _PROJECT_NAME.search(compose)
+    return match.group(1) if match else root.name
+
+
 def sync_dependencies(report: Report) -> bool:
     """Installs the locked dependencies into .venv with uv."""
     if run(["uv", "sync"]):
@@ -789,6 +824,7 @@ def ensure_siblings(compose: str, report: Report) -> bool:
 
     A downloaded release folder is moved into place after asking.
     A repository that is still missing is cloned when this repository is a Git clone.
+    A downloaded release runs the published images, so there a missing repository is fine.
 
     Returns:
         Whether every repository is present afterward.
@@ -803,22 +839,19 @@ def ensure_siblings(compose: str, report: Report) -> bool:
     if not missing:
         return True
     names = ", ".join(missing)
+    # A downloaded release runs the published images, so nothing is built from these folders.
+    if uses_published_images(REPO):
+        report.ok(
+            f"{names} runs from its published image, so its folder is optional. "
+            "The folder only holds the service's own optional settings."
+        )
+        return True
     without_it = "The Docker stack cannot be built without them."
     were = "were" if len(missing) > 1 else "was"
     print(
         f"  compose.stack.yml builds {names} from the folder next to this one, "
         f"but it {were} not found."
     )
-    # A downloaded release has no Git history, so the address of the others is unknown.
-    if not (REPO / ".git").exists():
-        report.problem(
-            f"{names} {were} not found next to this folder.",
-            without_it,
-            f"Download the latest release of {names} from GitHub as well. "
-            f"Extract it into {search_places()[-1]} and run the setup script again, "
-            "which then moves it where it belongs.",
-        )
-        return False
     manual_fix = f"Clone {names} into {REPO.parent} and run the setup script again."
     if not ensure_tool(GIT, report, without_it=without_it):
         return False
@@ -1305,22 +1338,439 @@ def ensure_docker_running(report: Report, *, ask_first: bool = True) -> bool:
     return False
 
 
-def start_stack(report: Report) -> bool:
-    """Builds and starts the bot and its services in Docker, after asking."""
-    if not ask("Build and start the bot and its services in Docker now?"):
+@dataclass(frozen=True)
+class ServiceImage:
+    """The image of one service, as the compose file names it.
+
+    Attributes:
+        service: The service name from the compose file.
+        ref: The image name and tag, such as ghcr.io/lempki/api-media:latest.
+        own: Whether it is the project's own image, which compose builds from the project folder.
+    """
+
+    service: str
+    ref: str
+    own: bool
+
+
+def parse_config_images(config: str, root: Path) -> list[ServiceImage]:
+    """Reads the image of every service from the output of docker compose config --format json.
+
+    Args:
+        config: The command's standard output.
+        root: The project folder.
+
+    Returns:
+        One entry per service that names an image, in the order of the output.
+    """
+    services = json.loads(config).get("services", {})
+    images: list[ServiceImage] = []
+    for service, settings in services.items():
+        ref = settings.get("image")
+        if not ref:
+            continue
+        build = settings.get("build")
+        context = build.get("context") if isinstance(build, dict) else build
+        own = context is not None and Path(context).resolve() == root.resolve()
+        images.append(ServiceImage(service=service, ref=ref, own=own))
+    return images
+
+
+def service_images(compose: list[str], root: Path) -> list[ServiceImage]:
+    """Lists the images that a project's services run, or nothing when compose fails.
+
+    Args:
+        compose: The start of the docker compose command for the project.
+        root: The project folder.
+    """
+    result = subprocess.run(
+        [*compose, "config", "--format", "json"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode != 0:
+        print(f"  {result.stderr.strip()}")
+        return []
+    return parse_config_images(result.stdout, root)
+
+
+def image_id(ref: str) -> str | None:
+    """Returns the ID of the image that a name and tag point to on this machine, or None."""
+    result = subprocess.run(
+        ["docker", "image", "inspect", "--format", "{{.Id}}", ref],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    image = result.stdout.strip()
+    return image if result.returncode == 0 and image else None
+
+
+def missing_images(compose: list[str], root: Path) -> list[str]:
+    """Lists the services whose image is not on this machine yet.
+
+    docker compose pull --policy missing downloads present images again when a newer one exists.
+    So start downloads only these services, and only the update action installs new releases.
+    """
+    return [
+        image.service
+        for image in service_images(compose, root)
+        if image_id(image.ref) is None
+    ]
+
+
+def sign_in_to_registry(report: Report) -> bool:
+    """Signs Docker in to the registry with a GitHub token, which a private image needs.
+
+    The token is read without echoing it and is never printed.
+    Docker keeps the sign-in, so later downloads, scheduled updates included, need no token.
+
+    Returns:
+        Whether Docker is signed in afterward.
+    """
+    # Without a person at the keyboard, such as in a scheduled update, nobody can paste a token.
+    if not sys.stdin.isatty():
+        return False
+    print(
+        f"  {REGISTRY} refused to send an image, which happens when the image is private."
+    )
+    print("  Docker then needs a GitHub token that may read packages.")
+    print(f"  Create one at {TOKEN_PAGE}")
+    print("  The page has read:packages ticked, which is all the token needs.")
+    print(
+        "  Updates stop when the token expires, and this script then asks for a new one."
+    )
+    try:
+        user = input(
+            "  Type the GitHub user name that owns the token. Press Enter to skip: "
+        ).strip()
+        token = getpass.getpass("  Paste the token here. It stays hidden: ").strip()
+    except EOFError:
+        user, token = "", ""
+    if not (user and token):
+        report.skip(
+            "Docker was not signed in to GitHub, so private images stay out of reach."
+        )
+        return False
+    print(f"  > docker login {REGISTRY} --username {user} --password-stdin")
+    result = subprocess.run(
+        ["docker", "login", REGISTRY, "--username", user, "--password-stdin"],
+        input=token,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode == 0:
+        report.ok(f"Signed Docker in to {REGISTRY} as {user}.")
+        return True
+    print(f"  {result.stderr.strip()}")
+    report.problem(
+        f"Signing in to {REGISTRY} as {user} failed.",
+        "Private images cannot be downloaded.",
+        "Check that the token belongs to that user, has the read:packages scope, "
+        "and has not expired. Then run this script again.",
+    )
+    return False
+
+
+def pull_images(
+    compose: list[str], report: Report, services: list[str] | None = None
+) -> bool:
+    """Downloads the newest published images, signing in when the registry asks.
+
+    Args:
+        compose: The start of the docker compose command for the project.
+        report: The report that records the outcome.
+        services: The services whose images to download. None downloads every service's.
+
+    Returns:
+        Whether the images are on this machine afterward.
+    """
+    command = [*compose, "pull", "--quiet", *(services or [])]
+    print("  Downloading the images. The first download can take a few minutes.")
+    signed_in = False
+    while True:
+        print(f"  > {' '.join(command)}")
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if result.returncode == 0:
+            return True
+        denied = bool(_PULL_DENIED.search(result.stderr))
+        if not denied or signed_in:
+            break
+        signed_in = sign_in_to_registry(report)
+        if not signed_in:
+            break
+    print(f"  {result.stderr.strip()}")
+    if denied:
+        report.problem(
+            f"{REGISTRY} refused to send an image.",
+            "Nothing new can start without it.",
+            "Either the image is private or GitHub has not published it yet. "
+            "A new release takes GitHub up to half an hour to publish, so try again later. "
+            "For a private image, run this script in a window, which asks for a GitHub token.",
+        )
+    else:
+        report.problem(
+            "Downloading the images failed.",
+            "Nothing new can start without them.",
+            "Read the error above. A lost internet connection is the most common cause. "
+            "Then run this script again.",
+        )
+    return False
+
+
+def cron_line(root: Path, name: str) -> str:
+    """Returns the crontab line that updates a project every night."""
+    folder = shlex.quote(str(root))
+    return (
+        f"0 {UPDATE_HOUR} * * * cd {folder} && ./run.sh update < /dev/null "
+        f">> update.log 2>&1 {_CRON_MARKER}{name}"
+    )
+
+
+def without_cron_line(crontab: str, name: str) -> str:
+    """Removes a project's scheduled update from crontab text, keeping every other line."""
+    lines = [
+        line
+        for line in crontab.splitlines()
+        if not line.endswith(f"{_CRON_MARKER}{name}")
+    ]
+    return "".join(f"{line}\n" for line in lines)
+
+
+def update_task_name(name: str) -> str:
+    """Returns the name of a project's scheduled update in the Windows Task Scheduler."""
+    return f"{name} update"
+
+
+# Task Scheduler runs this with the window hidden, and run.bat writes into update.log.
+# The values come from environment variables, so no quoting can break the command.
+_REGISTER_TASK = (
+    "$action = New-ScheduledTaskAction -Execute 'powershell.exe' "
+    "-Argument $env:UPDATE_ARGUMENT -WorkingDirectory $env:UPDATE_FOLDER; "
+    "$trigger = New-ScheduledTaskTrigger -Daily -At $env:UPDATE_TIME; "
+    # A laptop that was asleep or on battery at that time still updates when it can.
+    "$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries "
+    "-DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1); "
+    "Register-ScheduledTask -TaskName $env:UPDATE_TASK -Action $action -Trigger $trigger "
+    "-Settings $settings -Description $env:UPDATE_DESCRIPTION -Force | Out-Null"
+)
+
+_UNREGISTER_TASK = "Unregister-ScheduledTask -TaskName $env:UPDATE_TASK -Confirm:$false"
+
+_FIND_TASK = (
+    "if (Get-ScheduledTask -TaskName $env:UPDATE_TASK -ErrorAction SilentlyContinue) "
+    "{ exit 0 } else { exit 1 }"
+)
+
+# The command that the scheduled task runs. Reading from nul answers every question with no.
+UPDATE_ARGUMENT = (
+    "-NoProfile -NonInteractive -WindowStyle Hidden "
+    "-Command \"cmd.exe /c 'run.bat update < nul >> update.log 2>&1'\""
+)
+
+
+def run_task_script(script: str, root: Path, name: str) -> bool:
+    """Runs a PowerShell script about a project's scheduled update and returns whether it worked."""
+    env = {
+        **os.environ,
+        "UPDATE_ARGUMENT": UPDATE_ARGUMENT,
+        "UPDATE_FOLDER": str(root),
+        "UPDATE_TIME": f"{UPDATE_HOUR:02d}:00",
+        "UPDATE_TASK": update_task_name(name),
+        "UPDATE_DESCRIPTION": f"Installs the newest release of {name}. Created by its run script.",
+    }
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode != 0 and result.stderr.strip():
+        print(f"  {result.stderr.strip()}")
+    return result.returncode == 0
+
+
+def read_crontab() -> str | None:
+    """Returns this user's crontab, an empty string without one, or None without cron."""
+    try:
+        result = subprocess.run(
+            ["crontab", "-l"], capture_output=True, text=True, check=False
+        )
+    except OSError:
+        return None
+    return result.stdout if result.returncode == 0 else ""
+
+
+def write_crontab(text: str) -> bool:
+    """Replaces this user's crontab and returns whether it worked."""
+    try:
+        return (
+            subprocess.run(
+                ["crontab", "-"], input=text, text=True, check=False
+            ).returncode
+            == 0
+        )
+    except OSError:
+        return False
+
+
+def updates_scheduled(name: str) -> bool:
+    """Returns whether a project already updates itself every night."""
+    if sys.platform == "win32":
+        return run_task_script(_FIND_TASK, REPO, name)
+    crontab = read_crontab()
+    return crontab is not None and crontab != without_cron_line(crontab, name)
+
+
+def schedule_updates(root: Path, name: str, report: Report) -> bool:
+    """Makes the computer install the newest release of a project every night.
+
+    Returns:
+        Whether the scheduled update is in place.
+    """
+    when = f"every night at {UPDATE_HOUR:02d}:00"
+    if sys.platform == "win32":
+        scheduled = run_task_script(_REGISTER_TASK, root, name)
+        place = f"the Task Scheduler as {update_task_name(name)}"
+    else:
+        crontab = read_crontab()
+        scheduled = crontab is not None and write_crontab(
+            without_cron_line(crontab, name) + cron_line(root, name) + "\n"
+        )
+        place = "your crontab"
+    if scheduled:
+        report.ok(f"New releases install {when}. The update is in {place}.")
+        print("  Each update writes what it did into update.log in this folder.")
+        return True
+    report.problem(
+        "The nightly update could not be scheduled.",
+        "New releases only install when you run the update action yourself.",
+        "Read the error above, if any. Run run.bat update on Windows, "
+        "or ./run.sh update elsewhere, whenever you want to update.",
+    )
+    return False
+
+
+def unschedule_updates(name: str, report: Report) -> bool:
+    """Stops the nightly update of a project.
+
+    Returns:
+        Whether no scheduled update is left.
+    """
+    if not updates_scheduled(name):
+        report.ok("New releases were not installed automatically, so nothing changed.")
+        return True
+    if sys.platform == "win32":
+        removed = run_task_script(_UNREGISTER_TASK, REPO, name)
+    else:
+        crontab = read_crontab()
+        removed = crontab is not None and write_crontab(
+            without_cron_line(crontab, name)
+        )
+    if removed:
+        report.ok("New releases no longer install automatically.")
+        return True
+    report.problem(
+        "The nightly update could not be removed.",
+        "New releases keep installing every night.",
+        f"Delete {update_task_name(name)} in the Task Scheduler, "
+        "or its line in crontab -e on Linux and macOS.",
+    )
+    return False
+
+
+def offer_scheduled_updates(name: str, report: Report) -> None:
+    """Offers to install new releases automatically every night."""
+    if updates_scheduled(name):
+        report.ok(f"New releases already install every night at {UPDATE_HOUR:02d}:00.")
+        return
+    print("  An update downloads the newest release and restarts with it.")
+    print("  When the new version fails to start, the previous version runs again.")
+    if sys.platform == "win32":
+        print(
+            "  If the computer is off or asleep at that time, the update runs once it is on."
+        )
+    if not ask(
+        f"Install new releases automatically every night at {UPDATE_HOUR:02d}:00?"
+    ):
+        report.skip(
+            "New releases do not install automatically. "
+            "Use the update action to update, or the schedule action to turn this on."
+        )
+        return
+    schedule_updates(REPO, name, report)
+
+
+STACK_COMPOSE = ["docker", "compose", "-f", "compose.stack.yml"]
+
+
+def start_stack(report: Report, *, published: bool) -> bool:
+    """Starts the bot and its services in Docker, after asking.
+
+    Args:
+        report: The report that records the outcome.
+        published: Whether to download the published images instead of building them.
+
+    Returns:
+        Whether the stack started.
+    """
+    verb = "Download" if published else "Build"
+    if not ask(f"{verb} and start the bot and its services in Docker now?"):
         report.skip("The Docker stack was not started.")
         return False
-    if run(["docker", "compose", "-f", "compose.stack.yml", "up", "-d", "--build"]):
+    if published:
+        missing = missing_images(STACK_COMPOSE, REPO)
+        if missing and not pull_images(STACK_COMPOSE, report, missing):
+            return False
+        command = [*STACK_COMPOSE, "up", "-d", "--no-build"]
+    else:
+        command = [*STACK_COMPOSE, "up", "-d", "--build"]
+    if run(command):
         report.ok(
             "The bot and its services run in Docker. They start again whenever Docker starts."
         )
         return True
     report.problem(
-        "Docker could not build or start the stack.",
+        "Docker could not start the stack.",
         "The bot is not running.",
-        "Read the error above, fix it, and run docker compose -f compose.stack.yml up -d --build.",
+        "Read the error above, fix it, and run this script again.",
     )
     return False
+
+
+def install_local_tools(report: Report) -> None:
+    """Offers the tools that the Docker image installs, for running outside Docker."""
+    dockerfile = REPO / "Dockerfile"
+    if not dockerfile.exists():
+        return
+    text = dockerfile.read_text(encoding="utf-8")
+    for tool in tools_from_dockerfile(text, windows=sys.platform == "win32"):
+        ensure_tool(
+            tool,
+            report,
+            without_it=(
+                f"Running outside Docker fails where {tool.name} is needed. "
+                "Docker still works."
+            ),
+        )
 
 
 def print_problems(report: Report) -> None:
@@ -1339,12 +1789,16 @@ def print_problems(report: Report) -> None:
             print(f"  - {message}")
 
 
-def print_summary(report: Report) -> None:
+def print_summary(report: Report, *, published: bool) -> None:
     """Prints what still needs attention and how to start the project."""
     section("Summary")
     print_problems(report)
     print()
     print("  Start it in Docker    : run.bat on Windows, ./run.sh elsewhere")
+    if published:
+        print("  Update it             : run.bat update, or ./run.sh update")
+        print("  List every action     : run.bat help, or ./run.sh help")
+        return
     print("  Run it without Docker : run.bat local, or ./run.sh local")
     print("  Run the tests         : uv run pytest")
 
@@ -1360,6 +1814,7 @@ def main() -> int:
     stack_file = REPO / "compose.stack.yml"
     has_stack = is_bot and stack_file.exists()
     compose = stack_file.read_text(encoding="utf-8") if has_stack else ""
+    published = uses_published_images(REPO)
 
     section("Tools")
     has_docker = ensure_tool(
@@ -1369,21 +1824,16 @@ def main() -> int:
     if has_docker and sys.platform == "win32":
         docker_can_start = prepare_windows_virtualization(report)
         cap_wsl_memory(report)
-    dockerfile = REPO / "Dockerfile"
-    if dockerfile.exists():
-        text = dockerfile.read_text(encoding="utf-8")
-        for tool in tools_from_dockerfile(text, windows=sys.platform == "win32"):
-            ensure_tool(
-                tool,
-                report,
-                without_it=(
-                    f"Running outside Docker fails where {tool.name} is needed. "
-                    "Docker still works."
-                ),
-            )
-
-    section("Python dependencies")
-    sync_dependencies(report)
+    if published:
+        # Everything runs in the published images, which bring their own tools and dependencies.
+        report.ok(
+            "This downloaded release runs in Docker from published images, "
+            "so it needs no other tools."
+        )
+    else:
+        install_local_tools(report)
+        section("Python dependencies")
+        sync_dependencies(report)
 
     section("Settings in .env")
     original = load_env_file(report)
@@ -1405,9 +1855,11 @@ def main() -> int:
         # Docker is checked last, so Docker Desktop is not started for a stack that cannot run.
         ready = docker_can_start and has_siblings and has_token
         if ready and ensure_docker_running(report):
-            start_stack(report)
+            started = start_stack(report, published=published)
+            if started and published:
+                offer_scheduled_updates(project_name(REPO, compose), report)
 
-    print_summary(report)
+    print_summary(report, published=published)
     return 1 if report.required_failed else 0
 
 
