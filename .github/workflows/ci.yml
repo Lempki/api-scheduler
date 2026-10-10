@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   ci:
-    uses: Lempki/dev-standards/.github/workflows/python-ci.yml@v0.2.1
+    uses: Lempki/dev-standards/.github/workflows/python-ci.yml@v0.3.0
     with:
       docker: true
       mypy: true
